@@ -1,4 +1,32 @@
 node_modules
-dist
 .DS_Store
 *.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+venv/
+env/
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# Secrets & tokens
+*.secret.*
+secret.yaml
+token.txt
+token.secret.txt
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo

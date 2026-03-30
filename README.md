@@ -27,10 +27,15 @@ Could eventually be paired with AI, but:
 - Prefer local AI (e.g. Ollama)
 
 ## Architecture
-- Each task (or project) is a YAML file
-- All data is stored in these files
 
-Example file `m11ab_vintage_radio_build.yaml`:
+### Files
+
+Each task (or project) is a YAML file stored in the `data/` directory.
+
+**Filename format:** `AB12CD_readable_slug.yaml` — a random 6-character ID followed by a human-readable slug of the description.
+
+Example: `data/M11AB_vintage_radio_build.yaml`
+
 ```yaml
 description: Build a vintage radio
 start_date: ...
@@ -55,33 +60,72 @@ or:
     - Start a less complex build (alarm clock)
 ```
 
-Each line can point to another file. Links are defined by a hashtag comment + task ID (TBD).
+### Linking
 
+A line ending with `#task_id` links to another file. The ID is resolved by scanning the `data/` directory (supports up to ~500 files). Each line can have at most one link.
+
+### Config
+
+Fields and valid statuses are defined in `config.py`. This allows customising the schema without touching the app code.
 
 ## UI
 
-Terminal-based (Unix) with a vertical split screen:
+Terminal-based (Unix) with a vertical split screen.
 
-**Left panel:**
-- Parsed view of the document
-- Select a line
-- Edit the line at the bottom
-
-Single-line edit with keywords:
-`OR ... why/to ... how/by ...`
+**Left panel:** current task file — parsed view, one line selected at a time.
 
 **Right panel:**
-- The linked document is shown
-- If no link exists, a search tool allows adding one
-- Focus moves to this node (then shifts to the left panel)
+- v0.1: shows the linked file when a line with a `#link` is selected
+- v0.2: file list and search panel
+
+**Bottom bar:** inline editor (activated with `i`).
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate lines |
+| `i` | Enter edit mode |
+| `Esc` | Cancel edit (restores original value) |
+| `n` | Insert new line below |
+| `d` | Delete selected line |
+| `Enter` | Open linked file in left panel |
+| `b` | Go back to previous file |
+
+### Launch
+
+```bash
+pfq data/M11AB_vintage_radio_build.yaml   # open a specific file
+```
 
 ## Tech
+
 Built with Python:
 - Click
 - Rich and Textual
 
-## Open questions
-- File naming convention and ID creation
-- Flatten the directory structure for simplicity?
-- Interaction for the edit line
-- How to insert new line, delete a line
+## Roadmap
+
+### v0.1
+- Create and open a single file
+- Arrow key navigation
+- Edit mode: `i` to enter, auto-save on keystroke, `Esc` to cancel
+- Insert (`n`) and delete (`d`) lines
+- Right panel: preview of linked file
+- CLI: `pfq <file>`
+
+### v0.2
+- File list and search panel
+- Navigate between files with back-stack (`b`)
+
+### Later
+- AI integration (local, via Ollama)
+- Custom fields beyond config.py
+
+## Setup
+
+```bash
+pip install -e .
+pfq new "my first task"
+pfq open data/<filename>.yaml
+```
