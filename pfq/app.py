@@ -13,8 +13,11 @@ from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import ContentSwitcher, Footer, Input, Label, ListItem, ListView, Static
 
-from .config import FIELDS
-from .model import extract_link, find_file_by_id, load_task, save_task, new_filepath
+from .config import FIELDS, INVERSE_FIELDS
+from .model import (
+    add_backlink, check_backlinks, extract_link, find_file_by_id,
+    get_task_id, load_task, new_filepath, remove_backlink, save_task,
+)
 
 
 # ── Edit input ────────────────────────────────────────────────────────────────
@@ -667,6 +670,11 @@ class TaskPane(Widget, can_focus=True):
     def _on_unlink_confirmed(self, ok: bool, row: Row, original: str) -> None:
         if not ok:
             return
+        link_id = extract_link(original)
+        if link_id and row.field in INVERSE_FIELDS and self.path:
+            target = find_file_by_id(link_id, self.path.parent)
+            if target:
+                remove_backlink(target, INVERSE_FIELDS[row.field], get_task_id(self.path))
         clean = re.sub(r"\s*#\w+\s*$", "", original)
         self.apply_value(row, clean)
         save_task(self.path, self.data)  # type: ignore[arg-type]
@@ -872,14 +880,31 @@ class PfqApp(App):
         picker.focus()
 
     def _apply_link(self, path: Path) -> None:
-        task_id = path.stem.split("_")[0]
         pane = self.query_one("#task-pane", TaskPane)
         row = pane.current_row()
-        if row and row.editable:
-            current = get_row_text(row, pane.data)
-            clean = re.sub(r"\s*#\w+\s*$", "", current)
-            pane.apply_value(row, f"{clean} #{task_id}")
-            save_task(pane.path, pane.data)  # type: ignore[arg-type]
+        if not (row and row.editable and pane.path):
+            self._cancel_link()
+            return
+
+        target_id = get_task_id(path)
+        current = get_row_text(row, pane.data)
+
+        # Remove old backlink if replacing an existing link
+        old_id = extract_link(current)
+        if old_id and row.field in INVERSE_FIELDS:
+            old_target = find_file_by_id(old_id, pane.path.parent)
+            if old_target:
+                remove_backlink(old_target, INVERSE_FIELDS[row.field], get_task_id(pane.path))
+
+        clean = re.sub(r"\s*#\w+\s*$", "", current)
+        pane.apply_value(row, f"{clean} #{target_id}")
+        save_task(pane.path, pane.data)
+
+        # Add backlink in target file
+        if row.field in INVERSE_FIELDS:
+            source_desc = str(pane.data.get("description", ""))
+            add_backlink(path, INVERSE_FIELDS[row.field], get_task_id(pane.path), source_desc)
+
         self._cancel_link()
 
     def _cancel_link(self) -> None:
