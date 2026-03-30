@@ -14,7 +14,68 @@ from textual.widget import Widget
 from textual.widgets import ContentSwitcher, Footer, Input, Label, ListItem, ListView, Static
 
 from .config import FIELDS
-from .model import extract_link, find_file_by_id, load_task, save_task
+from .model import extract_link, find_file_by_id, load_task, save_task, new_filepath
+
+
+# ── Edit input ────────────────────────────────────────────────────────────────
+
+class EditInput(Input):
+    BINDINGS = [
+        Binding("enter",  "submit",      "Save",   show=True),
+        Binding("escape", "cancel_edit", "Cancel", show=True),
+    ]
+
+    def action_cancel_edit(self) -> None:
+        self.app._end_edit(save=False)  # type: ignore[attr-defined]
+
+
+# ── Modals ────────────────────────────────────────────────────────────────────
+
+_MODAL_CSS = """\
+    {name} {{ align: center middle; }}
+    #modal-box {{
+        width: 50; height: auto; max-height: 20;
+        border: solid $primary; background: $surface; padding: 1 2;
+    }}
+    #modal-box > Label {{ margin-bottom: 1; }}
+"""
+
+
+class NewTaskModal(ModalScreen[str | None]):
+    CSS = _MODAL_CSS.format(name="NewTaskModal")
+    BINDINGS = [Binding("escape", "dismiss", show=False)]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Label("New task description:")
+            yield Input(placeholder="description…", id="desc-input")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+
+class ConfirmModal(ModalScreen[bool]):
+    CSS = _MODAL_CSS.format(name="ConfirmModal")
+    BINDINGS = [
+        Binding("y",      "yes",     "Yes",    show=True),
+        Binding("n",      "no",      "No",     show=True),
+        Binding("escape", "no",                show=False),
+    ]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Label(self._message)
+            yield Label("[dim]y = confirm   n / Esc = cancel[/dim]")
+
+    def action_yes(self) -> None:
+        self.dismiss(True)
+
+    def action_no(self) -> None:
+        self.dismiss(False)
 
 
 # ── Row model ─────────────────────────────────────────────────────────────────
@@ -79,9 +140,11 @@ STATUS_STYLES: dict[str, str] = {
 
 class FileNavPane(Widget, can_focus=True):
     BINDINGS = [
-        Binding("up",    "cursor_up",   show=False),
-        Binding("down",  "cursor_down", show=False),
-        Binding("enter", "open_file",   "Open", show=True),
+        Binding("up",    "cursor_up",    show=False),
+        Binding("down",  "cursor_down",  show=False),
+        Binding("enter", "open_file",    "Open",   show=True),
+        Binding("n",     "new_task",     "New",    show=True),
+        Binding("d",     "delete_task",  "Delete", show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
@@ -217,6 +280,49 @@ class FileNavPane(Widget, can_focus=True):
             return self._files[self.cursor]
         return None
 
+    def action_new_task(self) -> None:
+        self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
+
+    def _on_new_task(self, description: str | None) -> None:
+        if not description:
+            return
+        from datetime import date
+        path = new_filepath(description, self.vault)
+        data: dict = {
+            "description": description,
+            "status": "todo",
+            "start_date": date.today().isoformat(),
+        }
+        for key, ftype in FIELDS.items():
+            if ftype == "list" and key not in data:
+                data[key] = []
+        save_task(path, data)
+        self.notify_file_added(path)
+        self.app._open_in_task_pane(path)  # type: ignore[attr-defined]
+
+    def action_delete_task(self) -> None:
+        path = self.current_path()
+        if path is None:
+            return
+        desc = self._meta.get(path, (path.stem, ""))[0]
+        self.app.push_screen(  # type: ignore[attr-defined]
+            ConfirmModal(f"Delete '{desc}' ?"),
+            lambda ok: self._on_delete_confirmed(ok, path),
+        )
+
+    def _on_delete_confirmed(self, ok: bool, path: Path) -> None:
+        if not ok:
+            return
+        path.unlink(missing_ok=True)
+        self._meta.pop(path, None)
+        self._refresh_files()
+        pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
+        if pane.path == path:
+            pane.path = None
+            pane.data = {}
+            pane.rows = []
+            pane.refresh()
+
     def notify_file_added(self, path: Path) -> None:
         self._meta.pop(path, None)
         self._refresh_files()
@@ -230,11 +336,12 @@ class TaskPane(Widget, can_focus=True):
     BINDINGS = [
         Binding("up",    "cursor_up",   show=False),
         Binding("down",  "cursor_down", show=False),
-        Binding("i",     "edit",        "Edit",        show=True),
-        Binding("n",     "insert",      "New",         show=True),
-        Binding("d",     "delete",      "Delete",      show=True),
-        Binding("a",     "add_section", "Add section", show=True),
-        Binding("enter", "open_link",   "Open",        show=True),
+        Binding("e",      "edit",        "Edit",        show=True),
+        Binding("n",      "insert",      "New",         show=True),
+        Binding("d",      "delete",      "Delete",      show=True),
+        Binding("a",      "add_section", "Add section", show=True),
+        Binding("enter",  "open_link",   "Open",        show=True),
+        Binding("escape", "back_to_nav", "Files",       show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
@@ -392,6 +499,9 @@ class TaskPane(Widget, can_focus=True):
 
     # ── Link navigation ───────────────────────────────────────────────────────
 
+    def action_back_to_nav(self) -> None:
+        self.app._show_file_nav()  # type: ignore[attr-defined]
+
     def action_open_link(self) -> None:
         row = self.current_row()
         if row is None:
@@ -513,6 +623,7 @@ PreviewPane {
 
 class PfqApp(App):
     CSS = APP_CSS
+    ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
         Binding("b",      "go_back", "Back", show=True),
@@ -537,7 +648,7 @@ class PfqApp(App):
             PreviewPane(id="preview-pane"),
             id="panes",
         )
-        yield Input(placeholder="edit — Esc to cancel", id="edit-bar")
+        yield EditInput(placeholder="edit…", id="edit-bar")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -569,7 +680,7 @@ class PfqApp(App):
     def begin_edit(self, row: Row, current: str) -> None:
         self._editing_row = row
         self._edit_original = current
-        bar = self.query_one("#edit-bar", Input)
+        bar = self.query_one("#edit-bar", EditInput)
         bar.add_class("active")
         bar.value = current
         bar.focus()
@@ -580,19 +691,8 @@ class PfqApp(App):
             return
         self.query_one("#task-pane", TaskPane).apply_value(self._editing_row, event.value)
 
-    def on_input_submitted(self, _event: Input.Submitted) -> None:
+    def on_input_submitted(self, _event: EditInput.Submitted) -> None:
         self._end_edit(save=True)
-
-    def on_key(self, event) -> None:
-        if event.key == "escape":
-            if self._editing_row is not None:
-                self._end_edit(save=False)
-                event.prevent_default()
-                event.stop()
-            elif self.query_one(ContentSwitcher).current == "task-pane":
-                self._show_file_nav()
-                event.prevent_default()
-                event.stop()
 
     def _end_edit(self, save: bool) -> None:
         pane = self.query_one("#task-pane", TaskPane)
@@ -602,7 +702,7 @@ class PfqApp(App):
             pane.restore_value(self._editing_row, self._edit_original)
         self._editing_row = None
         self._edit_original = ""
-        bar = self.query_one("#edit-bar", Input)
+        bar = self.query_one("#edit-bar", EditInput)
         bar.remove_class("active")
         bar.value = ""
         self._show_task_pane()
