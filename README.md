@@ -21,6 +21,7 @@ It is more a personal tool than a professional/enterprise task manager.
 Key design principles:
 - Local files for privacy
 - Simplicity: terminal-based
+- One YAML file per task — git-friendly (readable diffs, version history, branching)
 
 Could eventually be paired with AI, but:
 - Should work without AI
@@ -86,7 +87,8 @@ Terminal-based (Unix) with a vertical split screen.
 |---|---|
 | `↑` / `↓` | Navigate lines |
 | `i` | Enter edit mode |
-| `Esc` | Cancel edit (restores original value) |
+| `Enter` | Confirm edit and save to disk |
+| `Esc` | Cancel edit (restores original, no save) |
 | `n` | Insert new line below |
 | `d` | Delete selected line |
 | `Enter` | Open linked file in left panel |
@@ -109,7 +111,7 @@ Built with Python:
 ### v0.1
 - Create and open a single file
 - Arrow key navigation
-- Edit mode: `i` to enter, auto-save on keystroke, `Esc` to cancel
+- Edit mode: `i` to enter, `Enter` to save, `Esc` to cancel
 - Insert (`n`) and delete (`d`) lines
 - Right panel: preview of linked file
 - CLI: `pfq <file>`

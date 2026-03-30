@@ -312,13 +312,13 @@ class TaskPane(Widget, can_focus=True):
             self.app.begin_edit(row, get_row_text(row, self.data))  # type: ignore[attr-defined]
 
     def apply_value(self, row: Row, value: str) -> None:
+        """Update in-memory only — caller is responsible for saving."""
         set_row_text(row, self.data, value)
-        save_task(self.path, self.data)
         self.refresh()
 
     def restore_value(self, row: Row, original: str) -> None:
+        """Restore original in-memory value — no save needed."""
         set_row_text(row, self.data, original)
-        save_task(self.path, self.data)
         self.refresh()
 
     # ── Insert / Delete ───────────────────────────────────────────────────────
@@ -570,7 +570,6 @@ class PfqApp(App):
         if self._editing_row is None:
             return
         self.query_one("#task-pane", TaskPane).apply_value(self._editing_row, event.value)
-        self._sync_preview()
 
     def on_input_submitted(self, _event: Input.Submitted) -> None:
         self._end_edit(save=True)
@@ -587,10 +586,11 @@ class PfqApp(App):
                 event.stop()
 
     def _end_edit(self, save: bool) -> None:
-        if not save and self._editing_row is not None:
-            self.query_one("#task-pane", TaskPane).restore_value(
-                self._editing_row, self._edit_original
-            )
+        pane = self.query_one("#task-pane", TaskPane)
+        if save and self._editing_row is not None:
+            save_task(pane.path, pane.data)
+        elif not save and self._editing_row is not None:
+            pane.restore_value(self._editing_row, self._edit_original)
         self._editing_row = None
         self._edit_original = ""
         bar = self.query_one("#edit-bar", Input)
