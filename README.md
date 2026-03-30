@@ -39,31 +39,39 @@ Example: `data/M11AB_vintage_radio_build.yaml`
 
 ```yaml
 description: Build a vintage radio
-start_date: ...
+start_date: '2026-03-01'
 status: stuck
 why:
     - fun
     - learn stuff
-    - get a nice radio object
-    - have a project to show #a1y89
-need:
-    - time
 how:
-    - "get elec gear: soldering iron, voltmeter"
-    - (opt) find a fablab
-    - buy a first old radio #buy_old_radio
-    - build the new electronics #radio_elec
+    - get elec gear: soldering iron, voltmeter
+    - build the new electronics #R4DIO_elec
 but:
-    - budget <300 euros #budget300
+    - budget <300 euros
     - risk stopping midcourse
-    - lost time and money
 or:
     - Start a less complex build (alarm clock)
+required_by:
+    - personal projects showcase #A1B2C3
 ```
 
 ### Linking
 
 A line ending with `#task_id` links to another file. The ID is resolved by scanning the `data/` directory (supports up to ~500 files). Each line can have at most one link.
+
+### Backlinks
+
+Some fields have a defined inverse. When a link is created or removed via the TUI, the corresponding backlink in the target file is automatically maintained:
+
+| Field | Inverse |
+|---|---|
+| `how` | `why` |
+| `why` | `how` |
+| `need` | `required_by` |
+| `required_by` | `need` |
+
+`but` and `or` are one-directional (no inverse).
 
 ### Config
 
@@ -71,68 +79,96 @@ Fields and valid statuses are defined in `config.py`. This allows customising th
 
 ## UI
 
-Terminal-based (Unix) with a vertical split screen.
+Terminal-based (Unix), two-column layout.
 
-**Left panel:** current task file — parsed view, one line selected at a time.
+**Left panel** — switches between:
+- **File list** — browse and search all tasks in `data/`
+- **Task view** — parsed view of the open task, one line selected at a time
 
-**Right panel:**
-- v0.1: shows the linked file when a line with a `#link` is selected
-- v0.2: file list and search panel
+**Right panel** — switches between:
+- **Preview** — shows the file linked on the selected line
+- **Link picker** — file list for creating a link (activated with `l`)
 
-**Bottom bar:** inline editor (activated with `i`).
+**Bottom bar:** inline editor, shown when editing a line.
 
 ### Keyboard shortcuts
 
+#### File list
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate files |
+| `Enter` | Open file in task view |
+| `n` | Create new task (prompts for description) |
+| `d` | Delete task (with confirmation) |
+| `/` | Search / filter by description |
+| `Esc` | Clear search |
+
+#### Task view
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Navigate lines |
-| `i` | Enter edit mode |
-| `Enter` | Confirm edit and save to disk |
-| `Esc` | Cancel edit (restores original, no save) |
+| `e` | Enter edit mode |
+| `Enter` | Confirm edit and save |
+| `Esc` | Cancel edit — or return to file list |
 | `n` | Insert new line below |
 | `d` | Delete selected line |
-| `Enter` | Open linked file in left panel |
-| `b` | Go back to previous file |
+| `a` | Add a missing section |
+| `l` | Create a link on the selected line |
+| `u` | Remove the link on the selected line (with confirmation) |
+| `Enter` | Follow link — open linked file |
+| `b` | Go back (link navigation history) |
 
-### Launch
+#### Link picker (right panel)
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate files |
+| `Enter` | Link selected file (auto-creates backlink) |
+| `Esc` | Cancel |
+| `/` | Search / filter |
+
+### CLI
 
 ```bash
-pfq                                        # open the TUI (file list)
-pfq open data/M11AB_vintage_radio_build.yaml  # open a specific file
-pfq new "my project"                       # create and open a new task
+pfq                                          # open the TUI
+pfq new "my project"                         # create a new task and open it
+pfq open data/M11AB_vintage_radio_build.yaml # open a specific file
+pfq check                                    # report missing or broken backlinks
+pfq fix                                      # auto-fix missing backlinks
+pfq fix --dry-run                            # preview fixes without writing
 ```
 
 ## Tech
 
 Built with Python:
 - Click
-- Rich and Textual
-
-## Roadmap
-
-### v0.1
-- Create and open a single file
-- Arrow key navigation
-- Edit mode: `i` to enter, `Enter` to save, `Esc` to cancel
-- Insert (`n`) and delete (`d`) lines
-- Right panel: preview of linked file
-- CLI: `pfq <file>`
-
-### v0.2
-- File list and search panel
-- Navigate between files with back-stack (`b`)
-
-### Later
-- AI integration (local, via Ollama)
-- Custom fields beyond config.py
+- PyYAML
+- Textual (TUI framework, includes Rich)
 
 ## Setup
 
 ```bash
 pip install -e .
 pfq new "my first task"
-pfq open data/<filename>.yaml
 ```
+
+## Roadmap
+
+### v0.1 — done
+- Single file view with arrow navigation
+- Edit mode (`e` / `Enter` / `Esc`), insert (`n`), delete (`d`)
+- Auto-save on confirm, cancel restores original
+- Right panel: preview of linked file
+- Add missing section (`a`)
+
+### v0.2 — done
+- Two-column layout (file list ↔ task view, preview ↔ link picker)
+- File list with search (`/`), create (`n`), delete (`d`)
+- Link creation (`l`) and removal (`u`) with automatic backlink management
+- `pfq check` / `pfq fix` for backlink consistency
+
+### Later
+- AI integration (local, via Ollama)
+- Custom fields via config.py
 
 ## Credits
 
