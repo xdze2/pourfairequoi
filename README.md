@@ -1,38 +1,36 @@
-# PourFaireQuoi (pqf)
+# PourFaireQuoi (pfq)
 
-PourFaireQuoi is yet another todo list app, but as more task managers focus on \*what\* and \*when\*, this app focus on "How" and "Why", “but” “or”, ...etc.  It will allow to build a reasoning Engine for complex projects, tracking reasoning, choice and history.
+PourFaireQuoi is yet another todo list app, but while most task managers focus on *what* and *when*, this app focuses on *how*, *why*, *but*, *or*, and other reasoning dimensions. It allows you to build a reasoning engine for complex projects, tracking decisions, alternatives, and history.
 
-The idea is to build a minimal, simple app for prototyping and demo.
-The app name is pourfairequoi, abbreviated to “pfq”.
-
-
-### Goal of the app
+The goal is a minimal, simple app for prototyping and personal use.
+The app name is pourfairequoi, abbreviated to "pfq".
 
 
-- tool to brainstorm ideas
-- planify projects
-- brain dump/mindmapping
-- identify real motivation and alternative routes
-- keep a log
-- identify project roadblock
-  - Why it is stuck ?
-  - break down to smaller steps
-  
+## Goals
 
-It is more a personal tool, than a profesional/entreprise task manager.
-Thus the features:
-- local file for privacy
-- simplicity: terminal based
+- Brainstorm ideas
+- Plan projects
+- Brain dump / mind mapping
+- Identify real motivations and alternative routes
+- Keep a decision log
+- Identify project blockers
+  - Why is it stuck?
+  - Break it down into smaller steps
 
-Could eventually be paired with IA but:
-- should work without IA
-- local IA (ollama)
+It is more a personal tool than a professional/enterprise task manager.
+Key design principles:
+- Local files for privacy
+- Simplicity: terminal-based
+
+Could eventually be paired with AI, but:
+- Should work without AI
+- Prefer local AI (e.g. Ollama)
 
 ## Architecture
-- Each task (or project) is a yaml file
+- Each task (or project) is a YAML file
 - All data is stored in these files
 
-Example of file "m11ab_vintage_radio_build.yaml":
+Example file `m11ab_vintage_radio_build.yaml`:
 ```yaml
 description: Build a vintage radio
 start_date: ...
@@ -45,44 +43,45 @@ why:
 need:
     - time
 how:
-    - "get elec gears: soldering iron, voltemeter"
+    - "get elec gear: soldering iron, voltmeter"
     - (opt) find a fablab
     - buy a first old radio #buy_old_radio
     - build the new electronics #radio_elec
 but:
-    - budget <300euros #budget300
-    - "don't to stop midcourse"
+    - budget <300 euros #budget300
+    - risk stopping midcourse
     - lost time and money
 or:
     - Start a less complex build (alarm clock)
 ```
 
-Each line could point to another file. The link is defined is hastag//comment + task_id (TBD)
+Each line can point to another file. Links are defined by a hashtag comment + task ID (TBD).
 
 
-The UI is terminal based (unix) with a vertical split screen:
+## UI
 
-on the left part of the screen:
-- parsed view of the doc
-- select a line
-- edit the line in the bottom
+Terminal-based (Unix) with a vertical split screen:
 
-Single line edit with key words:
-OR ... why/to ... how/by ...
+**Left panel:**
+- Parsed view of the document
+- Select a line
+- Edit the line at the bottom
 
+Single-line edit with keywords:
+`OR ... why/to ... how/by ...`
 
-
-On the right part of the screen :
-- the linked doc is shown
-- if no link, search tool to add a link
-- focus on this node if it exists (then it will move to left part)
+**Right panel:**
+- The linked document is shown
+- If no link exists, a search tool allows adding one
+- Focus moves to this node (then shifts to the left panel)
 
 ## Tech
-Build using python with:
+Built with Python:
 - Click
 - Rich and Textual
 
 ## Open questions
-- naming files convention and id creation
-- flatten the dir structure for simplicity ?
-
+- File naming convention and ID creation
+- Flatten the directory structure for simplicity?
+- Interaction for the edit line
+- How to insert new line, delete a line
