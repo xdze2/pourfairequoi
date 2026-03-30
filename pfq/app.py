@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Footer, Input, ListView, ListItem, Label, Static
+from textual.widgets import ContentSwitcher, Footer, Input, Label, ListItem, ListView, Static
 
 from .config import FIELDS
 from .model import extract_link, find_file_by_id, load_task, save_task
@@ -23,7 +23,7 @@ from .model import extract_link, find_file_by_id, load_task, save_task
 class Row:
     kind: str        # "header" | "simple" | "item"
     field: str
-    idx: int | None  # list index (items only)
+    idx: int | None
 
     @property
     def editable(self) -> bool:
@@ -66,17 +66,175 @@ def set_row_text(row: Row, data: dict, value: str) -> None:
             items[row.idx] = value
 
 
+# ── File nav pane ─────────────────────────────────────────────────────────────
+
+STATUS_STYLES: dict[str, str] = {
+    "todo":      "dim",
+    "active":    "bold green",
+    "stuck":     "yellow",
+    "done":      "green",
+    "abandoned": "red",
+}
+
+
+class FileNavPane(Widget, can_focus=True):
+    BINDINGS = [
+        Binding("up",    "cursor_up",   show=False),
+        Binding("down",  "cursor_down", show=False),
+        Binding("enter", "open_file",   "Open", show=True),
+    ]
+
+    cursor: reactive[int] = reactive(0)
+
+    def __init__(self, vault: Path, **kwargs):
+        super().__init__(**kwargs)
+        self.vault = vault
+        self._all_files: list[Path] = []
+        self._files: list[Path] = []
+        self._meta: dict[Path, tuple[str, str]] = {}  # path -> (description, status)
+        self._searching = False
+        self._query = ""
+        self._scroll = 0
+
+    def on_mount(self) -> None:
+        self._refresh_files()
+
+    def _refresh_files(self) -> None:
+        if self.vault.exists():
+            self._all_files = sorted(
+                p for p in self.vault.iterdir()
+                if p.suffix in (".yaml", ".yml")
+            )
+        else:
+            self._all_files = []
+        for p in self._all_files:
+            if p not in self._meta:
+                try:
+                    data = load_task(p)
+                    desc = str(data.get("description", "") or p.stem)
+                    status = str(data.get("status", "") or "")
+                    self._meta[p] = (desc, status)
+                except Exception:
+                    self._meta[p] = (p.stem, "")
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        q = self._query.lower()
+        if q:
+            self._files = [
+                p for p in self._all_files
+                if q in self._meta.get(p, (p.stem, ""))[0].lower()
+                or q in p.stem.lower()
+            ]
+        else:
+            self._files = list(self._all_files)
+        self.cursor = max(0, min(self.cursor, len(self._files) - 1))
+        self._scroll = 0
+        self.refresh()
+
+    def on_key(self, event) -> None:
+        if self._searching:
+            if event.key == "escape":
+                self._searching = False
+                self._query = ""
+                self._apply_filter()
+                event.stop()
+            elif event.key == "backspace":
+                self._query = self._query[:-1]
+                self._apply_filter()
+                event.stop()
+            elif event.key == "enter":
+                self._searching = False
+                self.refresh()
+                event.stop()
+            elif event.character and event.character.isprintable():
+                self._query += event.character
+                self._apply_filter()
+                event.stop()
+        else:
+            if event.character == "/":
+                self._searching = True
+                self._query = ""
+                self.refresh()
+                event.stop()
+            elif event.key == "escape":
+                try:
+                    self.app.query_one("#task-pane", TaskPane).focus()
+                except Exception:
+                    pass
+                event.stop()
+
+    def render(self) -> Text:
+        height = max(self.size.height - 1, 3)
+        if self.cursor < self._scroll:
+            self._scroll = self.cursor
+        elif self._files and self.cursor >= self._scroll + height:
+            self._scroll = self.cursor - height + 1
+
+        t = Text(no_wrap=True, overflow="ellipsis")
+        for i, path in enumerate(self._files[self._scroll: self._scroll + height]):
+            abs_i = i + self._scroll
+            selected = abs_i == self.cursor
+            desc, status = self._meta.get(path, (path.stem, ""))
+            line = Text(no_wrap=True, overflow="ellipsis")
+            line.append(f" {desc}")
+            if status:
+                line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
+            if selected:
+                line.stylize("reverse")
+            t.append_text(line)
+            t.append("\n")
+
+        if self._searching:
+            t.append(f" /{self._query}▋", style="bold yellow")
+        else:
+            n = len(self._files)
+            t.append(f" {n} file{'s' if n != 1 else ''}  / to search", style="dim")
+        return t
+
+    def watch_cursor(self, _value: int) -> None:
+        self.refresh()
+        if self.has_focus:
+            try:
+                self.app._sync_preview()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+    def action_cursor_up(self) -> None:
+        if self.cursor > 0:
+            self.cursor -= 1
+
+    def action_cursor_down(self) -> None:
+        if self.cursor < len(self._files) - 1:
+            self.cursor += 1
+
+    def action_open_file(self) -> None:
+        if 0 <= self.cursor < len(self._files):
+            self.app._open_in_task_pane(self._files[self.cursor])  # type: ignore[attr-defined]
+
+    def current_path(self) -> Path | None:
+        if 0 <= self.cursor < len(self._files):
+            return self._files[self.cursor]
+        return None
+
+    def notify_file_added(self, path: Path) -> None:
+        self._meta.pop(path, None)
+        self._refresh_files()
+        if path in self._files:
+            self.cursor = self._files.index(path)
+
+
 # ── Task pane ─────────────────────────────────────────────────────────────────
 
 class TaskPane(Widget, can_focus=True):
     BINDINGS = [
-        Binding("up",    "cursor_up",   "Up",     show=False),
-        Binding("down",  "cursor_down", "Down",   show=False),
-        Binding("i",     "edit",        "Edit",   show=True),
-        Binding("n",     "insert",      "New",    show=True),
-        Binding("d",     "delete",      "Delete", show=True),
-        Binding("enter", "open_link",   "Open",   show=True),
+        Binding("up",    "cursor_up",   show=False),
+        Binding("down",  "cursor_down", show=False),
+        Binding("i",     "edit",        "Edit",        show=True),
+        Binding("n",     "insert",      "New",         show=True),
+        Binding("d",     "delete",      "Delete",      show=True),
         Binding("a",     "add_section", "Add section", show=True),
+        Binding("enter", "open_link",   "Open",        show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
@@ -105,8 +263,7 @@ class TaskPane(Widget, can_focus=True):
             self._scroll = self.cursor - height + 1
 
         t = Text(no_wrap=True, overflow="ellipsis")
-        visible = self.rows[self._scroll: self._scroll + height]
-        for i, row in enumerate(visible):
+        for i, row in enumerate(self.rows[self._scroll: self._scroll + height]):
             abs_i = i + self._scroll
             text = get_row_text(row, self.data)
             line = self._render_row(row, text, selected=(abs_i == self.cursor))
@@ -204,10 +361,14 @@ class TaskPane(Widget, can_focus=True):
         self._clamp()
         self.refresh()
 
+    # ── Add section ───────────────────────────────────────────────────────────
+
     def action_add_section(self) -> None:
         missing = [key for key in FIELDS if key not in self.data]
         if missing:
-            self.app.push_screen(AddSectionModal(missing), self._on_section_chosen)  # type: ignore[attr-defined]
+            self.app.push_screen(  # type: ignore[attr-defined]
+                AddSectionModal(missing), self._on_section_chosen
+            )
 
     def _on_section_chosen(self, section: str | None) -> None:
         if not section:
@@ -215,7 +376,6 @@ class TaskPane(Widget, can_focus=True):
         self.data[section] = [] if FIELDS[section] == "list" else ""
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
-        # Move cursor to the new section header
         for i, r in enumerate(self.rows):
             if r.kind == "header" and r.field == section:
                 self.cursor = i
@@ -271,12 +431,8 @@ class PreviewPane(Static):
 # ── Add-section modal ─────────────────────────────────────────────────────────
 
 class AddSectionModal(ModalScreen[str | None]):
-    """Pick a section to add to the current task."""
-
     CSS = """\
-    AddSectionModal {
-        align: center middle;
-    }
+    AddSectionModal { align: center middle; }
     #modal-box {
         width: 40;
         height: auto;
@@ -288,7 +444,7 @@ class AddSectionModal(ModalScreen[str | None]):
     #modal-box > Label { margin-bottom: 1; }
     """
 
-    BINDINGS = [Binding("escape", "dismiss", "Cancel", show=False)]
+    BINDINGS = [Binding("escape", "dismiss", show=False)]
 
     def __init__(self, available: list[str]) -> None:
         super().__init__()
@@ -302,8 +458,7 @@ class AddSectionModal(ModalScreen[str | None]):
                     yield ListItem(Label(name), id=f"section-{name}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        section = event.item.id.removeprefix("section-")
-        self.dismiss(section)
+        self.dismiss(event.item.id.removeprefix("section-"))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -324,8 +479,14 @@ Screen { layout: vertical; }
 
 #panes { height: 1fr; }
 
-TaskPane {
+ContentSwitcher {
     width: 1fr;
+    height: 1fr;
+}
+
+FileNavPane, TaskPane {
+    width: 1fr;
+    height: 1fr;
     border: solid $primary;
     padding: 0 1;
 }
@@ -337,11 +498,7 @@ PreviewPane {
     overflow-y: auto;
 }
 
-#edit-bar {
-    height: 3;
-    display: none;
-}
-
+#edit-bar { height: 3; display: none; }
 #edit-bar.active { display: block; }
 """
 
@@ -363,7 +520,11 @@ class PfqApp(App):
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
-            TaskPane(self._initial_path, id="task-pane"),
+            ContentSwitcher(
+                FileNavPane(self._initial_path.parent, id="file-nav"),
+                TaskPane(self._initial_path, id="task-pane"),
+                initial="file-nav",
+            ),
             PreviewPane(id="preview-pane"),
             id="panes",
         )
@@ -371,13 +532,28 @@ class PfqApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#task-pane", TaskPane).focus()
+        self._show_file_nav()
 
-    # ── Preview ───────────────────────────────────────────────────────────────
+    # ── Panel switching ───────────────────────────────────────────────────────
+
+    def _show_file_nav(self) -> None:
+        self.query_one(ContentSwitcher).current = "file-nav"
+        self.query_one("#file-nav", FileNavPane).focus()
+        self._sync_preview()
+
+    def _show_task_pane(self) -> None:
+        self.query_one(ContentSwitcher).current = "task-pane"
+        self.query_one("#task-pane", TaskPane).focus()
+        self._sync_preview()
+
+    # ── Preview sync ─────────────────────────────────────────────────────────
 
     def _sync_preview(self) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        self.query_one("#preview-pane", PreviewPane).show_file(pane.linked_path())
+        preview = self.query_one("#preview-pane", PreviewPane)
+        if self.query_one(ContentSwitcher).current == "file-nav":
+            preview.show_file(self.query_one("#file-nav", FileNavPane).current_path())
+        else:
+            preview.show_file(self.query_one("#task-pane", TaskPane).linked_path())
 
     # ── Edit lifecycle ────────────────────────────────────────────────────────
 
@@ -400,10 +576,15 @@ class PfqApp(App):
         self._end_edit(save=True)
 
     def on_key(self, event) -> None:
-        if event.key == "escape" and self._editing_row is not None:
-            self._end_edit(save=False)
-            event.prevent_default()
-            event.stop()
+        if event.key == "escape":
+            if self._editing_row is not None:
+                self._end_edit(save=False)
+                event.prevent_default()
+                event.stop()
+            elif self.query_one(ContentSwitcher).current == "task-pane":
+                self._show_file_nav()
+                event.prevent_default()
+                event.stop()
 
     def _end_edit(self, save: bool) -> None:
         if not save and self._editing_row is not None:
@@ -415,10 +596,13 @@ class PfqApp(App):
         bar = self.query_one("#edit-bar", Input)
         bar.remove_class("active")
         bar.value = ""
-        self.query_one("#task-pane", TaskPane).focus()
-        self._sync_preview()
+        self._show_task_pane()
 
     # ── File navigation ───────────────────────────────────────────────────────
+
+    def _open_in_task_pane(self, path: Path) -> None:
+        self._open_file(path)
+        self._show_task_pane()
 
     def navigate_to_id(self, link_id: str) -> None:
         pane = self.query_one("#task-pane", TaskPane)
@@ -439,4 +623,8 @@ class PfqApp(App):
         pane.cursor = 0
         pane._scroll = 0
         pane.refresh()
+        # Sync nav selection (watch_cursor won't touch preview since nav isn't focused)
+        nav = self.query_one("#file-nav", FileNavPane)
+        if path in nav._files:
+            nav.cursor = nav._files.index(path)
         self._sync_preview()
