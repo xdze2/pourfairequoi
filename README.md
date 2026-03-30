@@ -97,7 +97,9 @@ Terminal-based (Unix) with a vertical split screen.
 ### Launch
 
 ```bash
-pfq data/M11AB_vintage_radio_build.yaml   # open a specific file
+pfq                                        # open the TUI (file list)
+pfq open data/M11AB_vintage_radio_build.yaml  # open a specific file
+pfq new "my project"                       # create and open a new task
 ```
 
 ## Tech
@@ -131,3 +133,7 @@ pip install -e .
 pfq new "my first task"
 pfq open data/<filename>.yaml
 ```
+
+## Credits
+
+Built with the assistance of [Claude](https://claude.ai) (Anthropic) — used as a coding assistant throughout the design and implementation of this project.

@@ -6,15 +6,18 @@ from .config import FIELDS
 from .model import new_filepath, save_task
 
 
-@click.group()
-def cli():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
     """pfq — a reasoning-focused task manager."""
+    if ctx.invoked_subcommand is None:
+        PfqApp().run()
 
 
 @cli.command()
 @click.argument("file", type=click.Path(exists=True, path_type=Path))
 def open(file: Path):
-    """Open a task file."""
+    """Open a task file directly."""
     PfqApp(file).run()
 
 

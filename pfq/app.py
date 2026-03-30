@@ -239,10 +239,10 @@ class TaskPane(Widget, can_focus=True):
 
     cursor: reactive[int] = reactive(0)
 
-    def __init__(self, path: Path, **kwargs):
+    def __init__(self, path: Path | None = None, **kwargs):
         super().__init__(**kwargs)
         self.path = path
-        self.data: dict = load_task(path)
+        self.data: dict = load_task(path) if path else {}
         self.rows: list[Row] = build_rows(self.data)
         self._scroll: int = 0
 
@@ -256,6 +256,12 @@ class TaskPane(Widget, can_focus=True):
     # ── Render ────────────────────────────────────────────────────────────────
 
     def render(self) -> Text:
+        if not self.path:
+            t = Text()
+            t.append("\n  No file open\n", style="dim")
+            t.append("  Select a file from the list", style="dim")
+            return t
+
         height = max(self.size.height, 5)
         if self.cursor < self._scroll:
             self._scroll = self.cursor
@@ -307,6 +313,8 @@ class TaskPane(Widget, can_focus=True):
         return None
 
     def action_edit(self) -> None:
+        if not self.path:
+            return
         row = self.current_row()
         if row and row.editable:
             self.app.begin_edit(row, get_row_text(row, self.data))  # type: ignore[attr-defined]
@@ -511,7 +519,7 @@ class PfqApp(App):
         Binding("ctrl+q", "quit",    "Quit", show=True),
     ]
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         super().__init__()
         self._initial_path = path
         self._history: list[Path] = []
@@ -519,11 +527,12 @@ class PfqApp(App):
         self._edit_original: str = ""
 
     def compose(self) -> ComposeResult:
+        vault = self._initial_path.parent if self._initial_path else Path("data")
         yield Horizontal(
             ContentSwitcher(
-                FileNavPane(self._initial_path.parent, id="file-nav"),
+                FileNavPane(vault, id="file-nav"),
                 TaskPane(self._initial_path, id="task-pane"),
-                initial="file-nav",
+                initial="file-nav" if not self._initial_path else "task-pane",
             ),
             PreviewPane(id="preview-pane"),
             id="panes",
