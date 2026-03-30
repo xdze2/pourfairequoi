@@ -45,10 +45,18 @@ class NewTaskModal(ModalScreen[str | None]):
     CSS = _MODAL_CSS.format(name="NewTaskModal")
     BINDINGS = [Binding("escape", "dismiss", show=False)]
 
+    def __init__(self, default: str = "") -> None:
+        super().__init__()
+        self._default = default
+
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
             yield Label("New task description:")
-            yield Input(placeholder="description…", id="desc-input")
+            yield Input(value=self._default, placeholder="description…", id="desc-input")
+
+    def on_mount(self) -> None:
+        inp = self.query_one("#desc-input", Input)
+        inp.cursor_position = len(self._default)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
@@ -330,6 +338,142 @@ class FileNavPane(Widget, can_focus=True):
             self.cursor = self._files.index(path)
 
 
+# ── Link picker pane ──────────────────────────────────────────────────────────
+
+_CREATE_NEW = "✦  Create new task…"
+
+
+class LinkPickerPane(Widget, can_focus=True):
+    BINDINGS = [
+        Binding("up",     "cursor_up",  show=False),
+        Binding("down",   "cursor_down", show=False),
+        Binding("enter",  "select",     "Link",   show=True),
+        Binding("escape", "cancel",     "Cancel", show=True),
+    ]
+
+    cursor: reactive[int] = reactive(0)
+
+    def __init__(self, vault: Path, **kwargs):
+        super().__init__(**kwargs)
+        self.vault = vault
+        self._all_files: list[Path] = []
+        self._files: list[Path] = []
+        self._meta: dict[Path, tuple[str, str]] = {}
+        self._searching = False
+        self._query = ""
+        self._scroll = 0
+
+    def refresh_files(self) -> None:
+        if self.vault.exists():
+            self._all_files = sorted(
+                p for p in self.vault.iterdir()
+                if p.suffix in (".yaml", ".yml")
+            )
+        else:
+            self._all_files = []
+        for p in self._all_files:
+            if p not in self._meta:
+                try:
+                    data = load_task(p)
+                    self._meta[p] = (
+                        str(data.get("description", "") or p.stem),
+                        str(data.get("status", "") or ""),
+                    )
+                except Exception:
+                    self._meta[p] = (p.stem, "")
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        q = self._query.lower()
+        self._files = [
+            p for p in self._all_files
+            if not q
+            or q in self._meta.get(p, (p.stem, ""))[0].lower()
+            or q in p.stem.lower()
+        ]
+        self.cursor = 0
+        self._scroll = 0
+        self.refresh()
+
+    def on_key(self, event) -> None:
+        if self._searching:
+            if event.key == "escape":
+                self._searching = False
+                self._query = ""
+                self._apply_filter()
+                event.stop()
+            elif event.key == "backspace":
+                self._query = self._query[:-1]
+                self._apply_filter()
+                event.stop()
+            elif event.key == "enter":
+                self._searching = False
+                self.refresh()
+                event.stop()
+            elif event.character and event.character.isprintable():
+                self._query += event.character
+                self._apply_filter()
+                event.stop()
+        elif event.character == "/":
+            self._searching = True
+            self._query = ""
+            self.refresh()
+            event.stop()
+
+    def render(self) -> Text:
+        # Row 0 = "Create new", rows 1..N = files
+        total = 1 + len(self._files)
+        height = max(self.size.height - 1, 3)
+        if self.cursor < self._scroll:
+            self._scroll = self.cursor
+        elif self.cursor >= self._scroll + height:
+            self._scroll = self.cursor - height + 1
+
+        entries: list[Path | None] = [None] + self._files
+        t = Text(no_wrap=True, overflow="ellipsis")
+        for i, entry in enumerate(entries[self._scroll: self._scroll + height]):
+            abs_i = i + self._scroll
+            selected = abs_i == self.cursor
+            line = Text(no_wrap=True, overflow="ellipsis")
+            if entry is None:
+                line.append(f" {_CREATE_NEW}", style="bold green")
+            else:
+                desc, status = self._meta.get(entry, (entry.stem, ""))
+                line.append(f" {desc}")
+                if status:
+                    line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
+            if selected:
+                line.stylize("reverse")
+            t.append_text(line)
+            t.append("\n")
+
+        if self._searching:
+            t.append(f" /{self._query}▋", style="bold yellow")
+        else:
+            t.append(" / to search", style="dim")
+        return t
+
+    def watch_cursor(self, _value: int) -> None:
+        self.refresh()
+
+    def action_cursor_up(self) -> None:
+        if self.cursor > 0:
+            self.cursor -= 1
+
+    def action_cursor_down(self) -> None:
+        if self.cursor < len(self._files):  # 1 + len - 1
+            self.cursor += 1
+
+    def action_select(self) -> None:
+        if self.cursor == 0:
+            self.app._create_and_link()  # type: ignore[attr-defined]
+        else:
+            self.app._apply_link(self._files[self.cursor - 1])  # type: ignore[attr-defined]
+
+    def action_cancel(self) -> None:
+        self.app._cancel_link()  # type: ignore[attr-defined]
+
+
 # ── Task pane ─────────────────────────────────────────────────────────────────
 
 class TaskPane(Widget, can_focus=True):
@@ -341,6 +485,8 @@ class TaskPane(Widget, can_focus=True):
         Binding("d",      "delete",      "Delete",      show=True),
         Binding("a",      "add_section", "Add section", show=True),
         Binding("enter",  "open_link",   "Open",        show=True),
+        Binding("l",      "link",        "Link",        show=True),
+        Binding("u",      "unlink",      "Unlink",      show=True),
         Binding("escape", "back_to_nav", "Files",       show=True),
     ]
 
@@ -502,6 +648,29 @@ class TaskPane(Widget, can_focus=True):
     def action_back_to_nav(self) -> None:
         self.app._show_file_nav()  # type: ignore[attr-defined]
 
+    def action_link(self) -> None:
+        if self.path and self.current_row() and self.current_row().editable:  # type: ignore[union-attr]
+            self.app._start_linking()  # type: ignore[attr-defined]
+
+    def action_unlink(self) -> None:
+        row = self.current_row()
+        if row is None or not self.path:
+            return
+        text = get_row_text(row, self.data)
+        if not extract_link(text):
+            return
+        self.app.push_screen(  # type: ignore[attr-defined]
+            ConfirmModal("Remove this link?"),
+            lambda ok: self._on_unlink_confirmed(ok, row, text),
+        )
+
+    def _on_unlink_confirmed(self, ok: bool, row: Row, original: str) -> None:
+        if not ok:
+            return
+        clean = re.sub(r"\s*#\w+\s*$", "", original)
+        self.apply_value(row, clean)
+        save_task(self.path, self.data)  # type: ignore[arg-type]
+
     def action_open_link(self) -> None:
         row = self.current_row()
         if row is None:
@@ -585,7 +754,7 @@ def _append_with_link(t: Text, text: str) -> None:
     m = re.search(r"(\s*#\w+)\s*$", text)
     if m:
         t.append(text[: m.start()])
-        t.append(m.group(1).strip(), style="bold yellow")
+        t.append(" " + m.group(1).strip(), style="color(8)")
     else:
         t.append(text)
 
@@ -602,11 +771,15 @@ ContentSwitcher {
     height: 1fr;
 }
 
-FileNavPane, TaskPane {
+FileNavPane, TaskPane, LinkPickerPane {
     width: 1fr;
     height: 1fr;
     border: solid $primary;
     padding: 0 1;
+}
+
+LinkPickerPane {
+    border: solid $accent;
 }
 
 PreviewPane {
@@ -644,8 +817,14 @@ class PfqApp(App):
                 FileNavPane(vault, id="file-nav"),
                 TaskPane(self._initial_path, id="task-pane"),
                 initial="file-nav" if not self._initial_path else "task-pane",
+                id="left-switcher",
             ),
-            PreviewPane(id="preview-pane"),
+            ContentSwitcher(
+                PreviewPane(id="preview-pane"),
+                LinkPickerPane(vault, id="link-picker"),
+                initial="preview-pane",
+                id="right-switcher",
+            ),
             id="panes",
         )
         yield EditInput(placeholder="edit…", id="edit-bar")
@@ -657,23 +836,85 @@ class PfqApp(App):
     # ── Panel switching ───────────────────────────────────────────────────────
 
     def _show_file_nav(self) -> None:
-        self.query_one(ContentSwitcher).current = "file-nav"
+        self.query_one("#left-switcher", ContentSwitcher).current = "file-nav"
+        self._cancel_link()
         self.query_one("#file-nav", FileNavPane).focus()
         self._sync_preview()
 
     def _show_task_pane(self) -> None:
-        self.query_one(ContentSwitcher).current = "task-pane"
+        self.query_one("#left-switcher", ContentSwitcher).current = "task-pane"
         self.query_one("#task-pane", TaskPane).focus()
         self._sync_preview()
 
     # ── Preview sync ─────────────────────────────────────────────────────────
 
     def _sync_preview(self) -> None:
+        right = self.query_one("#right-switcher", ContentSwitcher)
+        if right.current == "link-picker":
+            return  # link picker manages the right panel itself
         preview = self.query_one("#preview-pane", PreviewPane)
-        if self.query_one(ContentSwitcher).current == "file-nav":
+        left = self.query_one("#left-switcher", ContentSwitcher)
+        if left.current == "file-nav":
             preview.show_file(self.query_one("#file-nav", FileNavPane).current_path())
         else:
             preview.show_file(self.query_one("#task-pane", TaskPane).linked_path())
+
+    # ── Linking ───────────────────────────────────────────────────────────────
+
+    def _start_linking(self) -> None:
+        picker = self.query_one("#link-picker", LinkPickerPane)
+        picker.refresh_files()
+        picker.cursor = 0
+        picker._searching = False
+        picker._query = ""
+        picker.refresh()
+        self.query_one("#right-switcher", ContentSwitcher).current = "link-picker"
+        picker.focus()
+
+    def _apply_link(self, path: Path) -> None:
+        task_id = path.stem.split("_")[0]
+        pane = self.query_one("#task-pane", TaskPane)
+        row = pane.current_row()
+        if row and row.editable:
+            current = get_row_text(row, pane.data)
+            clean = re.sub(r"\s*#\w+\s*$", "", current)
+            pane.apply_value(row, f"{clean} #{task_id}")
+            save_task(pane.path, pane.data)  # type: ignore[arg-type]
+        self._cancel_link()
+
+    def _cancel_link(self) -> None:
+        right = self.query_one("#right-switcher", ContentSwitcher)
+        if right.current == "link-picker":
+            right.current = "preview-pane"
+            self.query_one("#task-pane", TaskPane).focus()
+            self._sync_preview()
+
+    def _create_and_link(self) -> None:
+        pane = self.query_one("#task-pane", TaskPane)
+        row = pane.current_row()
+        default = ""
+        if row and row.editable:
+            raw = get_row_text(row, pane.data)
+            default = re.sub(r"\s*#\w+\s*$", "", raw).strip()
+        self.push_screen(NewTaskModal(default=default), self._on_new_task_for_link)
+
+    def _on_new_task_for_link(self, description: str | None) -> None:
+        if not description:
+            return
+        from datetime import date
+        vault = self.query_one("#file-nav", FileNavPane).vault
+        path = new_filepath(description, vault)
+        data: dict = {
+            "description": description,
+            "status": "todo",
+            "start_date": date.today().isoformat(),
+        }
+        for key, ftype in FIELDS.items():
+            if ftype == "list" and key not in data:
+                data[key] = []
+        save_task(path, data)
+        self.query_one("#file-nav", FileNavPane).notify_file_added(path)
+        self._apply_link(path)
 
     # ── Edit lifecycle ────────────────────────────────────────────────────────
 
