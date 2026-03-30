@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rich.text import Text
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -702,6 +703,15 @@ class PreviewPane(Static):
         if path is None:
             self.update("")
             return
+        self._load(path)
+
+    @work(thread=True, exclusive=True)
+    def _load(self, path: Path) -> None:
+        """Load and render a task file in a background thread.
+
+        exclusive=True cancels any in-flight load when a new one starts,
+        so rapid cursor movement never queues up blocking reads.
+        """
         try:
             data = load_task(path)
             t = Text()
@@ -718,9 +728,9 @@ class PreviewPane(Static):
                 else:
                     t.append(f"{key:<14}", style="dim")
                     t.append(f"{val}\n")
-            self.update(t)
+            self.app.call_from_thread(self.update, t)
         except Exception as exc:
-            self.update(f"[red]{exc}[/]")
+            self.app.call_from_thread(self.update, f"[red]{exc}[/]")
 
 
 # ── Add-section modal ─────────────────────────────────────────────────────────
