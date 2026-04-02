@@ -12,12 +12,26 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import ContentSwitcher, Footer, Input, Label, ListItem, ListView, Static
+from textual.widgets import (
+    ContentSwitcher,
+    Footer,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Static,
+)
 
 from .config import FIELDS, INVERSE_FIELDS
 from .model import (
-    add_backlink, extract_link, find_file_by_id,
-    get_task_id, load_task, new_filepath, remove_backlink, save_task,
+    add_backlink,
+    extract_link,
+    find_file_by_id,
+    get_task_id,
+    load_task,
+    new_filepath,
+    remove_backlink,
+    save_task,
 )
 
 
@@ -44,7 +58,9 @@ class NewTaskModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
             yield Label("New task description:")
-            yield Input(value=self._default, placeholder="description…", id="desc-input")
+            yield Input(
+                value=self._default, placeholder="description…", id="desc-input"
+            )
 
     def on_mount(self) -> None:
         inp = self.query_one("#desc-input", Input)
@@ -57,9 +73,9 @@ class NewTaskModal(ModalScreen[str | None]):
 class ConfirmModal(ModalScreen[bool]):
     CSS = _MODAL_CSS.format(name="ConfirmModal")
     BINDINGS = [
-        Binding("y",      "yes", "Yes",   show=True),
-        Binding("n",      "no",  "No",    show=True),
-        Binding("escape", "no",           show=False),
+        Binding("y", "yes", "Yes", show=True),
+        Binding("n", "no", "No", show=True),
+        Binding("escape", "no", show=False),
     ]
 
     def __init__(self, message: str) -> None:
@@ -80,9 +96,10 @@ class ConfirmModal(ModalScreen[bool]):
 
 # ── Row model ─────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class Row:
-    kind: str        # "header" | "simple" | "item"
+    kind: str  # "header" | "simple" | "item"
     field: str
     idx: int | None
 
@@ -129,6 +146,7 @@ def set_row_text(row: Row, data: dict, value: str) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _append_with_link(t: Text, text: str) -> None:
     m = re.search(r"(\s*#\w+)\s*$", text)
     if m:
@@ -141,21 +159,21 @@ def _append_with_link(t: Text, text: str) -> None:
 # ── File nav pane ─────────────────────────────────────────────────────────────
 
 STATUS_STYLES: dict[str, str] = {
-    "todo":      "dim",
-    "active":    "bold green",
-    "stuck":     "yellow",
-    "done":      "green",
+    "todo": "dim",
+    "active": "bold green",
+    "stuck": "yellow",
+    "done": "green",
     "abandoned": "red",
 }
 
 
 class FileNavPane(Widget, can_focus=True):
     BINDINGS = [
-        Binding("up",    "cursor_up",   show=False),
-        Binding("down",  "cursor_down", show=False),
-        Binding("enter", "open_file",   "Open",   show=True),
-        Binding("n",     "new_task",    "New",    show=True),
-        Binding("d",     "delete_task", "Delete", show=True),
+        Binding("up", "cursor_up", show=False),
+        Binding("down", "cursor_down", show=False),
+        Binding("enter", "open_file", "Open", show=True),
+        Binding("n", "new_task", "New", show=True),
+        Binding("d", "delete_task", "Delete", show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
@@ -176,8 +194,7 @@ class FileNavPane(Widget, can_focus=True):
     def _refresh_files(self) -> None:
         if self.vault.exists():
             self._all_files = sorted(
-                p for p in self.vault.iterdir()
-                if p.suffix in (".yaml", ".yml")
+                p for p in self.vault.iterdir() if p.suffix in (".yaml", ".yml")
             )
         else:
             self._all_files = []
@@ -196,7 +213,8 @@ class FileNavPane(Widget, can_focus=True):
         q = self._query.lower()
         if q:
             self._files = [
-                p for p in self._all_files
+                p
+                for p in self._all_files
                 if q in self._meta.get(p, (p.stem, ""))[0].lower()
                 or q in p.stem.lower()
             ]
@@ -246,7 +264,7 @@ class FileNavPane(Widget, can_focus=True):
             self._scroll = self.cursor - height + 1
 
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, path in enumerate(self._files[self._scroll: self._scroll + height]):
+        for i, path in enumerate(self._files[self._scroll : self._scroll + height]):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
             desc, status = self._meta.get(path, (path.stem, ""))
@@ -298,6 +316,7 @@ class FileNavPane(Widget, can_focus=True):
         if not description:
             return
         from datetime import date
+
         path = new_filepath(description, self.vault)
         data: dict = {
             "description": description,
@@ -348,10 +367,10 @@ _CREATE_NEW = "✦  Create new task…"
 
 class LinkPickerPane(Widget, can_focus=True):
     BINDINGS = [
-        Binding("up",     "cursor_up",   show=False),
-        Binding("down",   "cursor_down", show=False),
-        Binding("enter",  "select",      "Link",   show=True),
-        Binding("escape", "cancel",      "Cancel", show=True),
+        Binding("up", "cursor_up", show=False),
+        Binding("down", "cursor_down", show=False),
+        Binding("enter", "select", "Link", show=True),
+        Binding("escape", "cancel", "Cancel", show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
@@ -369,8 +388,7 @@ class LinkPickerPane(Widget, can_focus=True):
     def refresh_files(self) -> None:
         if self.vault.exists():
             self._all_files = sorted(
-                p for p in self.vault.iterdir()
-                if p.suffix in (".yaml", ".yml")
+                p for p in self.vault.iterdir() if p.suffix in (".yaml", ".yml")
             )
         else:
             self._all_files = []
@@ -389,7 +407,8 @@ class LinkPickerPane(Widget, can_focus=True):
     def _apply_filter(self) -> None:
         q = self._query.lower()
         self._files = [
-            p for p in self._all_files
+            p
+            for p in self._all_files
             if not q
             or q in self._meta.get(p, (p.stem, ""))[0].lower()
             or q in p.stem.lower()
@@ -432,7 +451,7 @@ class LinkPickerPane(Widget, can_focus=True):
 
         entries: list[Path | None] = [None] + self._files
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, entry in enumerate(entries[self._scroll: self._scroll + height]):
+        for i, entry in enumerate(entries[self._scroll : self._scroll + height]):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
             line = Text(no_wrap=True, overflow="ellipsis")
@@ -475,7 +494,8 @@ class LinkPickerPane(Widget, can_focus=True):
         self.app._cancel_link()  # type: ignore[attr-defined]
 
 
-# ── Inline input ──────────────────────────────────────────────────────────────
+# ── Inline input & non-focusable list ────────────────────────────────────────
+
 
 class _InlineInput(Input):
     """Inline editor — Escape is not consumed so it bubbles to TaskPane.on_key."""
@@ -485,7 +505,12 @@ class _InlineInput(Input):
             super()._on_key(event)
 
 
+class _TaskList(ListView, can_focus=False):
+    """ListView that never steals focus — TaskPane owns all keyboard handling."""
+
+
 # ── Task row item ─────────────────────────────────────────────────────────────
+
 
 class TaskRowItem(ListItem):
     """A single row in the task view."""
@@ -550,18 +575,19 @@ class TaskRowItem(ListItem):
 
 # ── Task pane ─────────────────────────────────────────────────────────────────
 
+
 class TaskPane(Widget, can_focus=True):
     BINDINGS = [
         Binding("up",     "cursor_up",   show=False),
         Binding("down",   "cursor_down", show=False),
-        Binding("enter",  "open_link",   "Follow",      show=True),
-        Binding("e",      "edit",        "Edit",        show=True),
-        Binding("n",      "insert",      "New",         show=True),
-        Binding("d",      "delete",      "Delete",      show=True),
-        Binding("a",      "add_section", "Add section", show=True),
-        Binding("l",      "link",        "Link",        show=True),
-        Binding("u",      "unlink",      "Unlink",      show=True),
-        Binding("escape", "back_to_nav", "Files",       show=True),
+        Binding("enter",  "insert",      "New line", show=True),
+        Binding("e",      "edit",        "Edit",     show=True),
+        Binding("d",      "delete",      "Delete",   show=True),
+        Binding("a",      "add_section", "Section",  show=True),
+        Binding("l",      "link",        "Link",     show=True),
+        Binding("u",      "unlink",      "Unlink",   show=True),
+        Binding("f",      "follow_link", "Follow",   show=True),
+        Binding("escape", "back_to_nav", "Files",    show=True),
     ]
 
     def __init__(self, path: Path | None = None, **kwargs):
@@ -570,48 +596,39 @@ class TaskPane(Widget, can_focus=True):
         self.data: dict = load_task(path) if path else {}
         self.rows: list[Row] = build_rows(self.data)
         self._cursor_idx: int = 0
+        self._items: list[TaskRowItem] = []
         self._editing: bool = False
         self._edit_original: str = ""
+        self._edit_link: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield ListView(id="task-list")
+        yield _TaskList(id="task-list")
 
     def on_mount(self) -> None:
         if self.path:
             self._rebuild()
 
-    def _lv(self) -> ListView:
-        return self.query_one("#task-list", ListView)
+    def _lv(self) -> _TaskList:
+        return self.query_one("#task-list", _TaskList)
 
     def _rebuild(self, keep_cursor: int = 0) -> None:
         lv = self._lv()
         lv.clear()
+        self._items = []
         self._cursor_idx = min(keep_cursor, len(self.rows) - 1) if self.rows else 0
         for i, row in enumerate(self.rows):
             item = TaskRowItem(row, self.data)
             item.selected = (i == self._cursor_idx)
+            self._items.append(item)
             lv.append(item)
-        # lv.index is set deferred so validate_index sees the mounted nodes
-        if self.rows:
-            cursor = self._cursor_idx
-            self.call_after_refresh(lambda: setattr(self._lv(), "index", cursor))
-
-    def _item_at(self, idx: int) -> TaskRowItem | None:
-        try:
-            items = list(self._lv().query(TaskRowItem))
-            return items[idx] if 0 <= idx < len(items) else None
-        except Exception:
-            return None
 
     def _set_cursor(self, new_idx: int) -> None:
-        old_item = self._item_at(self._cursor_idx)
-        if old_item:
-            old_item.selected = False
+        if 0 <= self._cursor_idx < len(self._items):
+            self._items[self._cursor_idx].selected = False
         self._cursor_idx = new_idx
-        new_item = self._item_at(new_idx)
-        if new_item:
-            new_item.selected = True
-        self._lv().index = new_idx  # keep ListView scroll in sync
+        if 0 <= new_idx < len(self._items):
+            self._items[new_idx].selected = True
+            self._lv().scroll_to_widget(self._items[new_idx])
 
     def current_row(self) -> Row | None:
         idx = self._cursor_idx
@@ -620,7 +637,8 @@ class TaskPane(Widget, can_focus=True):
         return None
 
     def _current_item(self) -> TaskRowItem | None:
-        return self._item_at(self._cursor_idx)
+        idx = self._cursor_idx
+        return self._items[idx] if 0 <= idx < len(self._items) else None
 
     def action_cursor_up(self) -> None:
         if self._cursor_idx > 0:
@@ -638,7 +656,7 @@ class TaskPane(Widget, can_focus=True):
             except Exception:
                 pass
 
-    def action_open_link(self) -> None:
+    def action_follow_link(self) -> None:
         if self._editing:
             return
         row = self.current_row()
@@ -664,8 +682,11 @@ class TaskPane(Widget, can_focus=True):
         item = self._current_item()
         if row and row.editable and item:
             self._editing = True
-            self._edit_original = get_row_text(row, self.data)
-            item.begin_edit(self._edit_original)
+            full_text = get_row_text(row, self.data)
+            self._edit_original = full_text
+            self._edit_link = extract_link(full_text)
+            edit_text = re.sub(r"\s*#\w+\s*$", "", full_text)
+            item.begin_edit(edit_text)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if not self._editing:
@@ -673,12 +694,16 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         item = self._current_item()
         if row and item:
-            set_row_text(row, self.data, event.value)
+            value = event.value
+            if self._edit_link:
+                value = f"{value} #{self._edit_link}" if value else f"#{self._edit_link}"
+            set_row_text(row, self.data, value)
             if self.path:
                 save_task(self.path, self.data)
             item.end_edit()
         self._editing = False
         self._edit_original = ""
+        self._edit_link = None
         self.focus()
         event.stop()
 
@@ -692,11 +717,11 @@ class TaskPane(Widget, can_focus=True):
                 item.end_edit()
             self._editing = False
             self._edit_original = ""
+            self._edit_link = None
             self.focus()
             event.stop()
 
     def set_value(self, row: Row, value: str) -> None:
-        """Update data and refresh the item label (used externally for linking)."""
         set_row_text(row, self.data, value)
         item = self._current_item()
         if item:
@@ -727,7 +752,7 @@ class TaskPane(Widget, can_focus=True):
                 cursor_pos = i
                 break
         self._rebuild(keep_cursor=cursor_pos)
-        self.call_after_refresh(self.action_edit)
+        self.action_edit()
 
     def action_delete(self) -> None:
         row = self.current_row()
@@ -796,7 +821,9 @@ class TaskPane(Widget, can_focus=True):
         if link_id and row.field in INVERSE_FIELDS and self.path:
             target = find_file_by_id(link_id, self.path.parent)
             if target:
-                remove_backlink(target, INVERSE_FIELDS[row.field], get_task_id(self.path))
+                remove_backlink(
+                    target, INVERSE_FIELDS[row.field], get_task_id(self.path)
+                )
         clean = re.sub(r"\s*#\w+\s*$", "", original)
         set_row_text(row, self.data, clean)
         if self.path:
@@ -807,6 +834,7 @@ class TaskPane(Widget, can_focus=True):
 
 
 # ── Preview pane ──────────────────────────────────────────────────────────────
+
 
 class PreviewPane(Static):
     def show_file(self, path: Path | None) -> None:
@@ -839,6 +867,7 @@ class PreviewPane(Static):
 
 
 # ── Add-section modal ─────────────────────────────────────────────────────────
+
 
 class AddSectionModal(ModalScreen[str | None]):
     CSS = """\
@@ -896,7 +925,7 @@ PreviewPane {
     overflow-y: auto;
 }
 
-#task-list {
+_TaskList {
     height: 1fr;
     background: transparent;
 }
@@ -932,8 +961,8 @@ class PfqApp(App):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
-        Binding("b",      "go_back", "Back", show=True),
-        Binding("ctrl+q", "quit",    "Quit", show=True),
+        Binding("b", "go_back", "Back", show=True),
+        Binding("q", "quit", "Quit", show=True),
     ]
 
     def __init__(self, path: Path | None = None) -> None:
@@ -1015,7 +1044,9 @@ class PfqApp(App):
         if old_id and row.field in INVERSE_FIELDS:
             old_target = find_file_by_id(old_id, pane.path.parent)
             if old_target:
-                remove_backlink(old_target, INVERSE_FIELDS[row.field], get_task_id(pane.path))
+                remove_backlink(
+                    old_target, INVERSE_FIELDS[row.field], get_task_id(pane.path)
+                )
 
         clean = re.sub(r"\s*#\w+\s*$", "", current)
         pane.set_value(row, f"{clean} #{target_id}")
@@ -1023,7 +1054,9 @@ class PfqApp(App):
 
         if row.field in INVERSE_FIELDS:
             source_desc = str(pane.data.get("description", ""))
-            add_backlink(path, INVERSE_FIELDS[row.field], get_task_id(pane.path), source_desc)
+            add_backlink(
+                path, INVERSE_FIELDS[row.field], get_task_id(pane.path), source_desc
+            )
 
         self._cancel_link()
 
@@ -1047,6 +1080,7 @@ class PfqApp(App):
         if not description:
             return
         from datetime import date
+
         vault = self.query_one("#file-nav", FileNavPane).vault
         path = new_filepath(description, vault)
         data: dict = {
