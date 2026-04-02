@@ -119,8 +119,11 @@ def build_rows(data: dict) -> list[Row]:
             if isinstance(val, list):
                 for i in range(len(val)):
                     rows.append(Row("item", key, i))
+            rows.append(Row("add", key, None))
         else:
             rows.append(Row("simple", key, None))
+    if any(key not in data for key in FIELDS):
+        rows.append(Row("add_section", "", None))
     return rows
 
 
@@ -533,6 +536,10 @@ class TaskRowItem(ListItem):
         t = Text(no_wrap=True, overflow="ellipsis")
         if self._row.kind == "header":
             t.append(f" ── {text} ", style="bold cyan")
+        elif self._row.kind == "add":
+            t.append("    +", style="on black")
+        elif self._row.kind == "add_section":
+            t.append("  +  section", style="on black")
         elif self._row.kind == "simple":
             t.append(f" {self._row.field:<14}", style="dim")
             _append_with_link(t, text)
@@ -580,14 +587,14 @@ class TaskPane(Widget, can_focus=True):
     BINDINGS = [
         Binding("up",     "cursor_up",   show=False),
         Binding("down",   "cursor_down", show=False),
-        Binding("enter",  "insert",      "New line", show=True),
-        Binding("e",      "edit",        "Edit",     show=True),
-        Binding("d",      "delete",      "Delete",   show=True),
-        Binding("a",      "add_section", "Section",  show=True),
-        Binding("l",      "link",        "Link",     show=True),
-        Binding("u",      "unlink",      "Unlink",   show=True),
-        Binding("f",      "follow_link", "Follow",   show=True),
-        Binding("escape", "back_to_nav", "Files",    show=True),
+        Binding("enter",  "follow_link", "Follow",  show=True),
+        Binding("e",      "edit",        "Edit",    show=True),
+        Binding("n",      "insert",      "New",     show=True),
+        Binding("d",      "delete",      "Delete",  show=True),
+        Binding("a",      "add_section", "Section", show=True),
+        Binding("l",      "link",        "Link",    show=True),
+        Binding("u",      "unlink",      "Unlink",  show=True),
+        Binding("escape", "back_to_nav", "Files",   show=True),
     ]
 
     def __init__(self, path: Path | None = None, **kwargs):
@@ -600,6 +607,7 @@ class TaskPane(Widget, can_focus=True):
         self._editing: bool = False
         self._edit_original: str = ""
         self._edit_link: str | None = None
+        self._edit_is_new: bool = False
 
     def compose(self) -> ComposeResult:
         yield _TaskList(id="task-list")
@@ -662,6 +670,12 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row is None:
             return
+        if row.kind == "add":
+            self.action_insert()
+            return
+        if row.kind == "add_section":
+            self.action_add_section()
+            return
         link_id = extract_link(get_row_text(row, self.data))
         if link_id:
             self.app.navigate_to_id(link_id)  # type: ignore[attr-defined]
@@ -704,6 +718,7 @@ class TaskPane(Widget, can_focus=True):
         self._editing = False
         self._edit_original = ""
         self._edit_link = None
+        self._edit_is_new = False
         self.focus()
         event.stop()
 
@@ -711,13 +726,23 @@ class TaskPane(Widget, can_focus=True):
         if self._editing and event.key == "escape":
             row = self.current_row()
             item = self._current_item()
-            if row:
-                set_row_text(row, self.data, self._edit_original)
-            if item:
-                item.end_edit()
-            self._editing = False
-            self._edit_original = ""
-            self._edit_link = None
+            if self._edit_is_new:
+                # new item was empty — delete it
+                if item:
+                    item.end_edit()
+                self._editing = False
+                self._edit_original = ""
+                self._edit_link = None
+                self._edit_is_new = False
+                self.action_delete()
+            else:
+                if row:
+                    set_row_text(row, self.data, self._edit_original)
+                if item:
+                    item.end_edit()
+                self._editing = False
+                self._edit_original = ""
+                self._edit_link = None
             self.focus()
             event.stop()
 
@@ -737,6 +762,10 @@ class TaskPane(Widget, can_focus=True):
             field, after = row.field, -1
         elif row.kind == "item":
             field, after = row.field, row.idx  # type: ignore[assignment]
+        elif row.kind == "add":
+            field = row.field
+            items = self.data.get(field, [])
+            after = (len(items) - 1) if isinstance(items, list) and items else -1
         else:
             return
         items = self.data.setdefault(field, [])
@@ -752,6 +781,7 @@ class TaskPane(Widget, can_focus=True):
                 cursor_pos = i
                 break
         self._rebuild(keep_cursor=cursor_pos)
+        self._edit_is_new = True
         self.action_edit()
 
     def action_delete(self) -> None:
