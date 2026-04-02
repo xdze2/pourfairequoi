@@ -111,17 +111,14 @@ class Row:
 def build_rows(data: dict) -> list[Row]:
     rows: list[Row] = []
     for key, ftype in FIELDS.items():
-        if key not in data:
+        if key not in data or ftype != "list":
             continue
-        if ftype == "list":
-            rows.append(Row("header", key, None))
-            val = data[key]
-            if isinstance(val, list):
-                for i in range(len(val)):
-                    rows.append(Row("item", key, i))
-            rows.append(Row("add", key, None))
-        else:
-            rows.append(Row("simple", key, None))
+        rows.append(Row("header", key, None))
+        val = data[key]
+        if isinstance(val, list):
+            for i in range(len(val)):
+                rows.append(Row("item", key, i))
+        rows.append(Row("add", key, None))
     if any(key not in data for key in FIELDS):
         rows.append(Row("add_section", "", None))
     return rows
@@ -580,21 +577,59 @@ class TaskRowItem(ListItem):
             pass
 
 
+# ── Task header (title + metadata) ───────────────────────────────────────────
+
+
+class _TaskTitle(Static):
+    """Single bold line: task description."""
+
+    DEFAULT_CSS = "_TaskTitle { height: 1; }"
+
+    def update_task(self, data: dict) -> None:
+        desc = str(data.get("description", "") or "")
+        self.update(Text(f" {desc}", style="bold"))
+
+
+class _TaskMeta(Static):
+    """Compact metadata line: status · start_date · last_modified."""
+
+    DEFAULT_CSS = "_TaskMeta { height: 1; }"
+
+    def update_task(self, data: dict) -> None:
+        status = str(data.get("status", "") or "")
+        start = str(data.get("start_date", "") or "")
+        modified = str(data.get("last_modified", "") or "")
+
+        t = Text(no_wrap=True, overflow="ellipsis")
+        t.append("  ")
+        if status:
+            t.append(status, style=STATUS_STYLES.get(status, "dim"))
+        else:
+            t.append("no status", style="dim")
+        if start:
+            t.append("   start ", style="dim")
+            t.append(start)
+        if modified:
+            t.append("   modified ", style="dim")
+            t.append(modified)
+        self.update(t)
+
+
 # ── Task pane ─────────────────────────────────────────────────────────────────
 
 
 class TaskPane(Widget, can_focus=True):
     BINDINGS = [
-        Binding("up",     "cursor_up",   show=False),
-        Binding("down",   "cursor_down", show=False),
-        Binding("enter",  "follow_link", "Follow",  show=True),
-        Binding("e",      "edit",        "Edit",    show=True),
-        Binding("n",      "insert",      "New",     show=True),
-        Binding("d",      "delete",      "Delete",  show=True),
-        Binding("a",      "add_section", "Section", show=True),
-        Binding("l",      "link",        "Link",    show=True),
-        Binding("u",      "unlink",      "Unlink",  show=True),
-        Binding("escape", "back_to_nav", "Files",   show=True),
+        Binding("up", "cursor_up", show=False),
+        Binding("down", "cursor_down", show=False),
+        Binding("enter", "follow_link", "Follow", show=True),
+        Binding("e", "edit", "Edit", show=True),
+        Binding("n", "insert", "New", show=True),
+        Binding("d", "delete", "Delete", show=True),
+        Binding("a", "add_section", "Section", show=True),
+        Binding("l", "link", "Link", show=True),
+        Binding("u", "unlink", "Unlink", show=True),
+        Binding("escape", "back_to_nav", "Files", show=True),
     ]
 
     def __init__(self, path: Path | None = None, **kwargs):
@@ -610,11 +645,21 @@ class TaskPane(Widget, can_focus=True):
         self._edit_is_new: bool = False
 
     def compose(self) -> ComposeResult:
+        yield _TaskTitle(id="task-title")
+        yield _TaskMeta(id="task-meta")
         yield _TaskList(id="task-list")
 
     def on_mount(self) -> None:
         if self.path:
+            self._refresh_title()
             self._rebuild()
+
+    def _refresh_title(self) -> None:
+        try:
+            self.query_one("#task-title", _TaskTitle).update_task(self.data)
+            self.query_one("#task-meta", _TaskMeta).update_task(self.data)
+        except Exception:
+            pass
 
     def _lv(self) -> _TaskList:
         return self.query_one("#task-list", _TaskList)
@@ -626,7 +671,7 @@ class TaskPane(Widget, can_focus=True):
         self._cursor_idx = min(keep_cursor, len(self.rows) - 1) if self.rows else 0
         for i, row in enumerate(self.rows):
             item = TaskRowItem(row, self.data)
-            item.selected = (i == self._cursor_idx)
+            item.selected = i == self._cursor_idx
             self._items.append(item)
             lv.append(item)
 
@@ -710,7 +755,9 @@ class TaskPane(Widget, can_focus=True):
         if row and item:
             value = event.value
             if self._edit_link:
-                value = f"{value} #{self._edit_link}" if value else f"#{self._edit_link}"
+                value = (
+                    f"{value} #{self._edit_link}" if value else f"#{self._edit_link}"
+                )
             set_row_text(row, self.data, value)
             if self.path:
                 save_task(self.path, self.data)
@@ -941,6 +988,11 @@ FileNavPane, TaskPane, LinkPickerPane {
     width: 1fr;
     height: 1fr;
     border: solid $primary;
+    padding: 0 0;
+    layout: vertical;
+}
+
+FileNavPane, LinkPickerPane {
     padding: 0 1;
 }
 
@@ -955,9 +1007,25 @@ PreviewPane {
     overflow-y: auto;
 }
 
+#task-title {
+    height: 1;
+    width: 1fr;
+    padding: 0 1;
+    background: $boost;
+}
+
+#task-meta {
+    height: auto;
+    width: 1fr;
+    padding: 0 0;
+    background: $boost;
+    border-bottom: solid white;
+}
+
 _TaskList {
     height: 1fr;
     background: transparent;
+    padding: 0 1;
 }
 
 TaskRowItem {
@@ -1149,6 +1217,7 @@ class PfqApp(App):
         pane.path = path
         pane.data = load_task(path)
         pane.rows = build_rows(pane.data)
+        pane._refresh_title()
         pane._rebuild()
         nav = self.query_one("#file-nav", FileNavPane)
         if path in nav._files:

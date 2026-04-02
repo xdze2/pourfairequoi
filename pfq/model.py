@@ -32,6 +32,8 @@ def load_task(path: Path) -> dict:
 
 
 def save_task(path: Path, data: dict) -> None:
+    from datetime import date
+    data["last_modified"] = date.today().isoformat()
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
