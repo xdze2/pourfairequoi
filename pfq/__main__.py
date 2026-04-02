@@ -64,6 +64,54 @@ def check(vault: Path):
 
 @cli.command()
 @click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
+@click.option("--dry-run", is_flag=True, help="Show what would be cleaned without writing.")
+def clean(vault: Path, dry_run: bool):
+    """Remove empty items and empty sections from all task files."""
+    from .config import FIELDS
+    from .model import load_task, save_task
+    if not vault.exists():
+        click.echo(f"Vault not found: {vault}")
+        return
+    files = sorted(p for p in vault.iterdir() if p.suffix in (".yaml", ".yml"))
+    total = 0
+    for path in files:
+        data = load_task(path)
+        changes = []
+        for key, ftype in FIELDS.items():
+            if key not in data:
+                continue
+            if ftype == "list":
+                items = data[key]
+                if not isinstance(items, list):
+                    continue
+                cleaned = [i for i in items if i is not None and str(i).strip() != ""]
+                if len(cleaned) < len(items):
+                    changes.append(f"  {key}: removed {len(items) - len(cleaned)} empty item(s)")
+                    data[key] = cleaned
+                if not data[key]:
+                    changes.append(f"  {key}: removed empty section")
+                    del data[key]
+            else:
+                val = data[key]
+                if val is None or str(val).strip() == "":
+                    changes.append(f"  {key}: removed empty field")
+                    del data[key]
+        if changes:
+            label = "[dry-run] " if dry_run else ""
+            click.echo(f"{label}{path.name}")
+            for c in changes:
+                click.echo(c)
+            if not dry_run:
+                save_task(path, data)
+            total += 1
+    if total == 0:
+        click.echo("Nothing to clean.")
+    elif not dry_run:
+        click.echo(f"\nCleaned {total} file(s).")
+
+
+@cli.command()
+@click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
 @click.option("--dry-run", is_flag=True, help="Show what would be fixed without writing.")
 def fix(vault: Path, dry_run: bool):
     """Auto-fix missing backlinks (skips broken links)."""
