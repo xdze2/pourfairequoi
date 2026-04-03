@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from rich.text import Text
 from textual import work
@@ -47,7 +48,7 @@ _MODAL_CSS = """\
 """
 
 
-class NewTaskModal(ModalScreen[str | None]):
+class NewTaskModal(ModalScreen[Optional[str]]):
     CSS = _MODAL_CSS.format(name="NewTaskModal")
     BINDINGS = [Binding("escape", "dismiss", show=False)]
 
@@ -946,7 +947,7 @@ class PreviewPane(Static):
 # ── Add-section modal ─────────────────────────────────────────────────────────
 
 
-class AddSectionModal(ModalScreen[str | None]):
+class AddSectionModal(ModalScreen[Optional[str]]):
     CSS = """\
     AddSectionModal { align: center middle; }
     #modal-box {
