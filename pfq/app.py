@@ -23,7 +23,7 @@ from textual.widgets import (
     Static,
 )
 
-from .config import FIELDS, INVERSE_FIELDS
+from .config import FIELDS, INVERSE_FIELDS, STATUSES, TYPES
 from .model import (
     add_backlink,
     extract_link,
@@ -101,35 +101,41 @@ class ConfirmModal(ModalScreen[bool]):
 
 @dataclass
 class Row:
-    kind: str  # "header" | "simple" | "item"
+    kind: str  # "header" | "simple" | "text" | "item" | "add"
     field: str
     idx: int | None
 
     @property
     def editable(self) -> bool:
-        return self.kind in ("simple", "item")
+        return self.kind in ("simple", "text", "item")
 
 
 def build_rows(data: dict) -> list[Row]:
     rows: list[Row] = []
+    # description is always first and always present
+    rows.append(Row("simple", "description", None))
     for key, ftype in FIELDS.items():
-        if key not in data or ftype != "list":
+        if key == "description":
             continue
-        rows.append(Row("header", key, None))
-        val = data[key]
-        if isinstance(val, list):
-            for i in range(len(val)):
-                rows.append(Row("item", key, i))
-        rows.append(Row("add", key, None))
-    if any(key not in data for key in FIELDS):
-        rows.append(Row("add_section", "", None))
+        if key not in data:
+            continue
+        if ftype in ("str", "text"):
+            kind = "text" if ftype == "text" else "simple"
+            rows.append(Row(kind, key, None))
+        elif ftype == "list":
+            val = data.get(key)
+            if isinstance(val, list) and val:
+                rows.append(Row("header", key, None))
+                for i in range(len(val)):
+                    rows.append(Row("item", key, i))
+                rows.append(Row("add", key, None))
     return rows
 
 
 def get_row_text(row: Row, data: dict) -> str:
     if row.kind == "header":
         return f"{row.field}:"
-    if row.kind == "simple":
+    if row.kind in ("simple", "text"):
         return str(data.get(row.field) or "")
     items = data.get(row.field, [])
     if isinstance(items, list) and row.idx is not None and row.idx < len(items):
@@ -138,7 +144,7 @@ def get_row_text(row: Row, data: dict) -> str:
 
 
 def set_row_text(row: Row, data: dict, value: str) -> None:
-    if row.kind == "simple":
+    if row.kind in ("simple", "text"):
         data[row.field] = value
     elif row.kind == "item":
         items = data.get(row.field)
@@ -160,13 +166,8 @@ def _append_with_link(t: Text, text: str) -> None:
 
 # ── File nav pane ─────────────────────────────────────────────────────────────
 
-STATUS_STYLES: dict[str, str] = {
-    "todo": "dim",
-    "active": "bold green",
-    "stuck": "yellow",
-    "done": "green",
-    "abandoned": "red",
-}
+STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
+TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
 
 
 class _AppHeader(Static):
@@ -257,10 +258,13 @@ class FileNavPane(Widget, can_focus=True):
             data = self.store.get(path, {})
             desc = str(data.get("description", "") or path.stem)
             status = str(data.get("status", "") or "")
+            task_type = str(data.get("type", "") or "")
             line = Text(no_wrap=True, overflow="ellipsis")
             line.append(f" {desc}")
+            if task_type:
+                line.append(f" {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
             if status:
-                line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
+                line.append(f" {status}", style=STATUS_STYLES.get(status, "dim"))
             if selected:
                 line.stylize("reverse")
             t.append_text(line)
@@ -304,6 +308,7 @@ class FileNavPane(Widget, can_focus=True):
         path = new_filepath(description, self.vault)
         data: dict = {
             "description": description,
+            "type": "task",
             "status": "todo",
             "start_date": date.today().isoformat(),
         }
@@ -494,18 +499,31 @@ class TaskRowItem(ListItem):
     def compose(self) -> ComposeResult:
         yield Label(self._make_renderable(), id="row-label")
 
+    def on_mount(self) -> None:
+        if self._row.kind == "text":
+            self.add_class("--text")
+
     def watch_selected(self, _value: bool) -> None:
         self.refresh_label()
 
     def _make_renderable(self) -> Text:
         text = get_row_text(self._row, self._data)
+        if self._row.kind == "text":
+            t = Text(overflow="fold")
+            t.append(f" ── {self._row.field} \n", style="bold cyan")
+            if text:
+                for line in text.splitlines():
+                    t.append(f"   {line}\n", style="dim")
+            else:
+                t.append("   (empty)\n", style="dim")
+            if self.selected:
+                t.stylize("reverse")
+            return t
         t = Text(no_wrap=True, overflow="ellipsis")
         if self._row.kind == "header":
             t.append(f" ── {text} ", style="bold cyan")
         elif self._row.kind == "add":
             t.append("    +", style="on black")
-        elif self._row.kind == "add_section":
-            t.append("  +  section", style="on black")
         elif self._row.kind == "simple":
             t.append(f" {self._row.field:<14}", style="dim")
             _append_with_link(t, text)
@@ -550,37 +568,22 @@ class TaskRowItem(ListItem):
 
 
 class _TaskTitle(Static):
-    """Single bold line: task description."""
+    """Context bar: type + status."""
 
     DEFAULT_CSS = "_TaskTitle { height: 1; }"
 
     def update_task(self, data: dict) -> None:
-        desc = str(data.get("description", "") or "")
-        self.update(Text(f" {desc}", style="bold"))
-
-
-class _TaskMeta(Static):
-    """Compact metadata line: status · start_date · last_modified."""
-
-    DEFAULT_CSS = "_TaskMeta { height: 1; }"
-
-    def update_task(self, data: dict) -> None:
+        task_type = str(data.get("type", "") or "")
         status = str(data.get("status", "") or "")
-        start = str(data.get("start_date", "") or "")
-        modified = str(data.get("last_modified", "") or "")
-
         t = Text(no_wrap=True, overflow="ellipsis")
         t.append("  ")
+        if task_type:
+            t.append(task_type, style=TYPE_STYLES.get(task_type, "dim"))
+            t.append("  ")
         if status:
             t.append(status, style=STATUS_STYLES.get(status, "dim"))
         else:
-            t.append("no status", style="dim")
-        if start:
-            t.append("   start ", style="dim")
-            t.append(start)
-        if modified:
-            t.append("   modified ", style="dim")
-            t.append(modified)
+            t.append("—", style="dim")
         self.update(t)
 
 
@@ -595,7 +598,7 @@ class TaskPane(Widget, can_focus=True):
         Binding("e", "edit", "Edit", show=True),
         Binding("n", "insert", "New", show=True),
         Binding("d", "delete", "Delete", show=True),
-        Binding("a", "add_section", "Section", show=True),
+        Binding("a", "add_field", "Add field", show=True),
         Binding("l", "link", "Link", show=True),
         Binding("u", "unlink", "Unlink", show=True),
         Binding("escape", "back_to_nav", "Files", show=True),
@@ -615,7 +618,6 @@ class TaskPane(Widget, can_focus=True):
 
     def compose(self) -> ComposeResult:
         yield _TaskTitle(id="task-title")
-        yield _TaskMeta(id="task-meta")
         yield _TaskList(id="task-list")
 
     def on_mount(self) -> None:
@@ -626,7 +628,6 @@ class TaskPane(Widget, can_focus=True):
     def _refresh_title(self) -> None:
         try:
             self.query_one("#task-title", _TaskTitle).update_task(self.data)
-            self.query_one("#task-meta", _TaskMeta).update_task(self.data)
         except Exception:
             pass
 
@@ -678,9 +679,6 @@ class TaskPane(Widget, can_focus=True):
             return
         if row.kind == "add":
             self.action_insert()
-            return
-        if row.kind == "add_section":
-            self.action_add_section()
             return
         link_id = extract_link(get_row_text(row, self.data))
         if link_id:
@@ -803,27 +801,45 @@ class TaskPane(Widget, can_focus=True):
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
 
-    # ── Add section ───────────────────────────────────────────────────────────
+    # ── Add field ─────────────────────────────────────────────────────────────
 
-    def action_add_section(self) -> None:
-        missing = [key for key in FIELDS if key not in self.data]
+    def action_add_field(self) -> None:
+        # Fields missing or empty (str/text empty, list empty or absent)
+        missing = []
+        for key, ftype in FIELDS.items():
+            if key == "description":
+                continue
+            val = self.data.get(key)
+            if ftype == "list":
+                if not isinstance(val, list) or not val:
+                    missing.append(key)
+            else:
+                if not val or not str(val).strip():
+                    missing.append(key)
         if missing:
             self.app.push_screen(  # type: ignore[attr-defined]
-                AddSectionModal(missing), self._on_section_chosen
+                AddSectionModal(missing), self._on_field_chosen
             )
 
-    def _on_section_chosen(self, section: str | None) -> None:
-        if not section or not self.path:
+    def _on_field_chosen(self, field: str | None) -> None:
+        if not field or not self.path:
             return
-        self.data[section] = [] if FIELDS[section] == "list" else ""
+        ftype = FIELDS[field]
+        if ftype == "list":
+            self.data[field] = [""]
+        else:
+            self.data[field] = ""
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
+        # For lists: land on the first item (skip header); for str/text: land on the row
         cursor_pos = 0
         for i, r in enumerate(self.rows):
-            if r.kind == "header" and r.field == section:
+            if r.field == field and r.kind != "header":
                 cursor_pos = i
                 break
         self._rebuild(keep_cursor=cursor_pos)
+        self._edit_is_new = True
+        self.action_edit()
 
     # ── Link navigation ───────────────────────────────────────────────────────
 
@@ -891,7 +907,7 @@ class AddSectionModal(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
-            yield Label("Add section:")
+            yield Label("Add field:")
             with ListView():
                 for name in self._available:
                     yield ListItem(Label(name), id=f"section-{name}")
@@ -950,18 +966,11 @@ LinkPickerPane {
     background: $boost;
 }
 
-#task-meta {
-    height: auto;
-    width: 1fr;
-    padding: 0 0;
-    background: $boost;
-    border-bottom: solid white;
-}
 
 _TaskList {
     height: 1fr;
     background: transparent;
-    padding: 0 1;
+    padding: 1 1 0 1;
 }
 
 TaskRowItem {
@@ -970,10 +979,18 @@ TaskRowItem {
     background: transparent;
 }
 
+TaskRowItem.--text {
+    height: auto;
+}
+
 TaskRowItem > Label {
     width: 1fr;
     padding: 0;
     background: transparent;
+}
+
+TaskRowItem.--text > Label {
+    height: auto;
 }
 
 TaskRowItem > Input {
@@ -1106,6 +1123,7 @@ class PfqApp(App):
         path = new_filepath(description, vault)
         data: dict = {
             "description": description,
+            "type": "task",
             "status": "todo",
             "start_date": date.today().isoformat(),
         }

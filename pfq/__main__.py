@@ -29,6 +29,7 @@ def new(description: str):
     path = new_filepath(description)
     data: dict = {
         "description": description,
+        "type": "task",
         "status": "todo",
         "start_date": date.today().isoformat(),
     }
