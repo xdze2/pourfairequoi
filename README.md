@@ -27,6 +27,21 @@ Could eventually be paired with AI, but:
 - Should work without AI
 - Prefer local AI (e.g. Ollama)
 
+## Data model
+
+### Node types
+- goal — aspirational, no clear end condition ("be healthier")
+- task — concrete, completable ("buy running shoes")
+- constraint — a fact that shapes decisions, not something you do ("budget < 300€")
+
+
+### Node status
+
+statuses as pure lifecycle
+
+- todo, active, stuck, done, discarded
+
+
 ## Architecture
 
 ### Files
@@ -38,9 +53,14 @@ Each task (or project) is a YAML file stored in the `data/` directory.
 Example: `data/M11AB_vintage_radio_build.yaml`
 
 ```yaml
-description: Build a vintage radio
+description: Build a vintage radio   # short title, used in list view
+type: goal                            # goal | task | constraint
+status: stuck                         # todo | active | stuck | done | discarded
 start_date: '2026-03-01'
-status: stuck
+due_date: '2026-06-01'               # deadline or scheduled date (optional)
+notes: |                              # free-form multiline text
+  Started this after watching a restoration video.
+  Main challenge is sourcing the original capacitors.
 why:
     - fun
     - learn stuff
@@ -79,17 +99,17 @@ Fields and valid statuses are defined in `config.py`. This allows customising th
 
 ## UI
 
-Terminal-based (Unix), two-column layout.
+Terminal-based (Unix), two-column layout (1/3 — 2/3).
 
-**Left panel** — switches between:
-- **File list** — browse and search all tasks in `data/`
+**Left column:**
+- **App header** — app title
+- **File list** — browse and search all tasks, showing description, type and status
+
+**Right column** — switches between:
 - **Task view** — parsed view of the open task, one line selected at a time
-
-**Right panel** — switches between:
-- **Preview** — shows the file linked on the selected line
 - **Link picker** — file list for creating a link (activated with `l`)
 
-**Bottom bar:** inline editor, shown when editing a line.
+**Bottom bar:** key bindings reference (Textual footer).
 
 ### Keyboard shortcuts
 
@@ -166,7 +186,14 @@ pfq new "my first task"
 - Link creation (`l`) and removal (`u`) with automatic backlink management
 - `pfq check` / `pfq fix` for backlink consistency
 
+### v0.3 — in progress
+- New data model: `type` (goal / task / constraint), `due_date`, `notes`
+- Preload all files into memory at startup for fast search and richer list view
+- Two-column layout: left = app header + file list, right = task view / link picker
+
 ### Later
+- Show type and due date in file list
+- Full-text search across `notes`
 - AI integration (local, via Ollama)
 - Custom fields via config.py
 
