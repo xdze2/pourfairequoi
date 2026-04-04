@@ -99,12 +99,10 @@ def remove_backlink(target_path: Path, field: str, source_id: str) -> None:
     save_task(target_path, data)
 
 
-def check_backlinks(vault: Path) -> list[dict]:
+def check_backlinks(vault: Path, store: dict[Path, dict] | None = None) -> list[dict]:
     """Return a list of backlink inconsistencies across all task files."""
     from .config import INVERSE_FIELDS
-    files = [p for p in sorted(vault.iterdir()) if p.suffix in (".yaml", ".yml")]
-    data_cache = {p: load_task(p) for p in files}
-    id_to_path = {get_task_id(p): p for p in files}
+    data_cache = store if store is not None else load_all(vault)
     issues = []
 
     for path, data in data_cache.items():
