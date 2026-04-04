@@ -168,6 +168,10 @@ STATUS_STYLES: dict[str, str] = {
 }
 
 
+class _AppHeader(Static):
+    DEFAULT_CSS = "_AppHeader { height: 3; }"
+
+
 class FileNavPane(Widget, can_focus=True):
     BINDINGS = [
         Binding("up", "cursor_up", show=False),
@@ -287,11 +291,6 @@ class FileNavPane(Widget, can_focus=True):
 
     def watch_cursor(self, _value: int) -> None:
         self.refresh()
-        if self.has_focus:
-            try:
-                self.app._sync_preview()  # type: ignore[attr-defined]
-            except Exception:
-                pass
 
     def action_cursor_up(self) -> None:
         if self.cursor > 0:
@@ -697,18 +696,10 @@ class TaskPane(Widget, can_focus=True):
     def action_cursor_up(self) -> None:
         if self._cursor_idx > 0:
             self._set_cursor(self._cursor_idx - 1)
-            try:
-                self.app._sync_preview()  # type: ignore[attr-defined]
-            except Exception:
-                pass
 
     def action_cursor_down(self) -> None:
         if self._cursor_idx < len(self.rows) - 1:
             self._set_cursor(self._cursor_idx + 1)
-            try:
-                self.app._sync_preview()  # type: ignore[attr-defined]
-            except Exception:
-                pass
 
     def action_follow_link(self) -> None:
         if self._editing:
@@ -911,39 +902,6 @@ class TaskPane(Widget, can_focus=True):
             item.refresh_label()
 
 
-# ── Preview pane ──────────────────────────────────────────────────────────────
-
-
-class PreviewPane(Static):
-    def show_file(self, path: Path | None) -> None:
-        if path is None:
-            self.update("")
-            return
-        self._load(path)
-
-    @work(thread=True, exclusive=True)
-    def _load(self, path: Path) -> None:
-        try:
-            data = load_task(path)
-            t = Text()
-            t.append(path.name + "\n", style="bold")
-            t.append("─" * 32 + "\n", style="dim")
-            for key, ftype in FIELDS.items():
-                val = data.get(key)
-                if val is None:
-                    continue
-                if ftype == "list" and isinstance(val, list):
-                    t.append(f"{key}:\n", style="bold cyan")
-                    for item in val:
-                        t.append(f"  • {item}\n")
-                else:
-                    t.append(f"{key:<14}", style="dim")
-                    t.append(f"{val}\n")
-            self.app.call_from_thread(self.update, t)
-        except Exception as exc:
-            self.app.call_from_thread(self.update, f"[red]{exc}[/]")
-
-
 # ── Add-section modal ─────────────────────────────────────────────────────────
 
 
@@ -980,32 +938,40 @@ Screen { layout: vertical; }
 
 #panes { height: 1fr; }
 
-ContentSwitcher {
+#left-col {
     width: 1fr;
     height: 1fr;
+}
+
+#right-switcher {
+    width: 2fr;
+    height: 1fr;
+}
+
+_AppHeader {
+    height: 3;
+    width: 1fr;
+    padding: 0 2;
+    background: $boost;
+    border: solid $surface-lighten-2;
+    text-style: bold;
+    content-align: left middle;
 }
 
 FileNavPane, TaskPane, LinkPickerPane {
     width: 1fr;
     height: 1fr;
-    border: solid $primary;
-    padding: 0 0;
+    border: solid $surface-lighten-2;
+    padding: 0 1;
     layout: vertical;
 }
 
-FileNavPane, LinkPickerPane {
-    padding: 0 1;
+FileNavPane:focus, TaskPane:focus, LinkPickerPane:focus {
+    border: solid $primary;
 }
 
 LinkPickerPane {
     border: solid $accent;
-}
-
-PreviewPane {
-    width: 1fr;
-    border: solid $surface;
-    padding: 0 1;
-    overflow-y: auto;
 }
 
 #task-title {
@@ -1072,16 +1038,15 @@ class PfqApp(App):
     def compose(self) -> ComposeResult:
         vault = self._initial_path.parent if self._initial_path else Path("data")
         yield Horizontal(
-            ContentSwitcher(
+            Vertical(
+                _AppHeader(" pourquoifaire", id="app-header"),
                 FileNavPane(vault, id="file-nav"),
-                TaskPane(self._initial_path, id="task-pane"),
-                initial="file-nav" if not self._initial_path else "task-pane",
-                id="left-switcher",
+                id="left-col",
             ),
             ContentSwitcher(
-                PreviewPane(id="preview-pane"),
+                TaskPane(self._initial_path, id="task-pane"),
                 LinkPickerPane(vault, id="link-picker"),
-                initial="preview-pane",
+                initial="task-pane",
                 id="right-switcher",
             ),
             id="panes",
@@ -1089,33 +1054,19 @@ class PfqApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._show_file_nav()
+        if self._initial_path:
+            self.query_one("#task-pane", TaskPane).focus()
+        else:
+            self.query_one("#file-nav", FileNavPane).focus()
 
     # ── Panel switching ───────────────────────────────────────────────────────
 
     def _show_file_nav(self) -> None:
-        self.query_one("#left-switcher", ContentSwitcher).current = "file-nav"
         self._cancel_link()
         self.query_one("#file-nav", FileNavPane).focus()
-        self._sync_preview()
 
     def _show_task_pane(self) -> None:
-        self.query_one("#left-switcher", ContentSwitcher).current = "task-pane"
         self.query_one("#task-pane", TaskPane).focus()
-        self._sync_preview()
-
-    # ── Preview sync ─────────────────────────────────────────────────────────
-
-    def _sync_preview(self) -> None:
-        right = self.query_one("#right-switcher", ContentSwitcher)
-        if right.current == "link-picker":
-            return
-        preview = self.query_one("#preview-pane", PreviewPane)
-        left = self.query_one("#left-switcher", ContentSwitcher)
-        if left.current == "file-nav":
-            preview.show_file(self.query_one("#file-nav", FileNavPane).current_path())
-        else:
-            preview.show_file(self.query_one("#task-pane", TaskPane).linked_path())
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
@@ -1162,9 +1113,8 @@ class PfqApp(App):
     def _cancel_link(self) -> None:
         right = self.query_one("#right-switcher", ContentSwitcher)
         if right.current == "link-picker":
-            right.current = "preview-pane"
+            right.current = "task-pane"
             self.query_one("#task-pane", TaskPane).focus()
-            self._sync_preview()
 
     def _create_and_link(self) -> None:
         pane = self.query_one("#task-pane", TaskPane)
@@ -1223,4 +1173,3 @@ class PfqApp(App):
         nav = self.query_one("#file-nav", FileNavPane)
         if path in nav._files:
             nav.cursor = nav._files.index(path)
-        self._sync_preview()
