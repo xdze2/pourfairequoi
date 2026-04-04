@@ -31,6 +31,19 @@ def load_task(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def load_all(vault: Path) -> dict[Path, dict]:
+    result: dict[Path, dict] = {}
+    if not vault.exists():
+        return result
+    for p in sorted(vault.iterdir()):
+        if p.suffix in (".yaml", ".yml"):
+            try:
+                result[p] = load_task(p)
+            except Exception:
+                result[p] = {}
+    return result
+
+
 def save_task(path: Path, data: dict) -> None:
     from datetime import date
     data["last_modified"] = date.today().isoformat()

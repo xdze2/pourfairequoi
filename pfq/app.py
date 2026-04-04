@@ -29,6 +29,7 @@ from .model import (
     extract_link,
     find_file_by_id,
     get_task_id,
+    load_all,
     load_task,
     new_filepath,
     remove_backlink,
@@ -183,48 +184,29 @@ class FileNavPane(Widget, can_focus=True):
 
     cursor: reactive[int] = reactive(0)
 
-    def __init__(self, vault: Path, **kwargs):
+    def __init__(self, vault: Path, store: dict[Path, dict], **kwargs):
         super().__init__(**kwargs)
         self.vault = vault
-        self._all_files: list[Path] = []
+        self.store = store
         self._files: list[Path] = []
-        self._meta: dict[Path, tuple[str, str]] = {}
         self._searching = False
         self._query = ""
         self._scroll = 0
 
     def on_mount(self) -> None:
-        self._refresh_files()
-
-    def _refresh_files(self) -> None:
-        if self.vault.exists():
-            self._all_files = sorted(
-                p for p in self.vault.iterdir() if p.suffix in (".yaml", ".yml")
-            )
-        else:
-            self._all_files = []
-        for p in self._all_files:
-            if p not in self._meta:
-                try:
-                    data = load_task(p)
-                    desc = str(data.get("description", "") or p.stem)
-                    status = str(data.get("status", "") or "")
-                    self._meta[p] = (desc, status)
-                except Exception:
-                    self._meta[p] = (p.stem, "")
         self._apply_filter()
 
     def _apply_filter(self) -> None:
         q = self._query.lower()
+        all_files = sorted(self.store.keys())
         if q:
             self._files = [
-                p
-                for p in self._all_files
-                if q in self._meta.get(p, (p.stem, ""))[0].lower()
+                p for p in all_files
+                if q in str(self.store[p].get("description", "") or p.stem).lower()
                 or q in p.stem.lower()
             ]
         else:
-            self._files = list(self._all_files)
+            self._files = all_files
         self.cursor = max(0, min(self.cursor, len(self._files) - 1))
         self._scroll = 0
         self.refresh()
@@ -272,7 +254,9 @@ class FileNavPane(Widget, can_focus=True):
         for i, path in enumerate(self._files[self._scroll : self._scroll + height]):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
-            desc, status = self._meta.get(path, (path.stem, ""))
+            data = self.store.get(path, {})
+            desc = str(data.get("description", "") or path.stem)
+            status = str(data.get("status", "") or "")
             line = Text(no_wrap=True, overflow="ellipsis")
             line.append(f" {desc}")
             if status:
@@ -327,14 +311,14 @@ class FileNavPane(Widget, can_focus=True):
             if ftype == "list" and key not in data:
                 data[key] = []
         save_task(path, data)
-        self.notify_file_added(path)
+        self.notify_file_added(path, data)
         self.app._open_in_task_pane(path)  # type: ignore[attr-defined]
 
     def action_delete_task(self) -> None:
         path = self.current_path()
         if path is None:
             return
-        desc = self._meta.get(path, (path.stem, ""))[0]
+        desc = str(self.store.get(path, {}).get("description", "") or path.stem)
         self.app.push_screen(  # type: ignore[attr-defined]
             ConfirmModal(f"Delete '{desc}' ?"),
             lambda ok: self._on_delete_confirmed(ok, path),
@@ -344,8 +328,8 @@ class FileNavPane(Widget, can_focus=True):
         if not ok:
             return
         path.unlink(missing_ok=True)
-        self._meta.pop(path, None)
-        self._refresh_files()
+        self.store.pop(path, None)
+        self._apply_filter()
         pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
         if pane.path == path:
             pane.path = None
@@ -353,9 +337,9 @@ class FileNavPane(Widget, can_focus=True):
             pane.rows = []
             pane._rebuild()
 
-    def notify_file_added(self, path: Path) -> None:
-        self._meta.pop(path, None)
-        self._refresh_files()
+    def notify_file_added(self, path: Path, data: dict) -> None:
+        self.store[path] = data
+        self._apply_filter()
         if path in self._files:
             self.cursor = self._files.index(path)
 
@@ -375,42 +359,25 @@ class LinkPickerPane(Widget, can_focus=True):
 
     cursor: reactive[int] = reactive(0)
 
-    def __init__(self, vault: Path, **kwargs):
+    def __init__(self, vault: Path, store: dict[Path, dict], **kwargs):
         super().__init__(**kwargs)
         self.vault = vault
-        self._all_files: list[Path] = []
+        self.store = store
         self._files: list[Path] = []
-        self._meta: dict[Path, tuple[str, str]] = {}
         self._searching = False
         self._query = ""
         self._scroll = 0
 
     def refresh_files(self) -> None:
-        if self.vault.exists():
-            self._all_files = sorted(
-                p for p in self.vault.iterdir() if p.suffix in (".yaml", ".yml")
-            )
-        else:
-            self._all_files = []
-        for p in self._all_files:
-            if p not in self._meta:
-                try:
-                    data = load_task(p)
-                    self._meta[p] = (
-                        str(data.get("description", "") or p.stem),
-                        str(data.get("status", "") or ""),
-                    )
-                except Exception:
-                    self._meta[p] = (p.stem, "")
         self._apply_filter()
 
     def _apply_filter(self) -> None:
         q = self._query.lower()
+        all_files = sorted(self.store.keys())
         self._files = [
-            p
-            for p in self._all_files
+            p for p in all_files
             if not q
-            or q in self._meta.get(p, (p.stem, ""))[0].lower()
+            or q in str(self.store[p].get("description", "") or p.stem).lower()
             or q in p.stem.lower()
         ]
         self.cursor = 0
@@ -458,7 +425,9 @@ class LinkPickerPane(Widget, can_focus=True):
             if entry is None:
                 line.append(f" {_CREATE_NEW}", style="bold green")
             else:
-                desc, status = self._meta.get(entry, (entry.stem, ""))
+                data = self.store.get(entry, {})
+                desc = str(data.get("description", "") or entry.stem)
+                status = str(data.get("status", "") or "")
                 line.append(f" {desc}")
                 if status:
                     line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
@@ -1034,18 +1003,20 @@ class PfqApp(App):
         super().__init__()
         self._initial_path = path
         self._history: list[Path] = []
+        vault = path.parent if path else Path("data")
+        self.store: dict[Path, dict] = load_all(vault)
 
     def compose(self) -> ComposeResult:
         vault = self._initial_path.parent if self._initial_path else Path("data")
         yield Horizontal(
             Vertical(
                 _AppHeader(" pourquoifaire", id="app-header"),
-                FileNavPane(vault, id="file-nav"),
+                FileNavPane(vault, self.store, id="file-nav"),
                 id="left-col",
             ),
             ContentSwitcher(
                 TaskPane(self._initial_path, id="task-pane"),
-                LinkPickerPane(vault, id="link-picker"),
+                LinkPickerPane(vault, self.store, id="link-picker"),
                 initial="task-pane",
                 id="right-switcher",
             ),
@@ -1107,6 +1078,7 @@ class PfqApp(App):
             add_backlink(
                 path, INVERSE_FIELDS[row.field], get_task_id(pane.path), source_desc
             )
+            self.store[path] = load_task(path)  # refresh backlink target in store
 
         self._cancel_link()
 
@@ -1141,7 +1113,8 @@ class PfqApp(App):
             if ftype == "list" and key not in data:
                 data[key] = []
         save_task(path, data)
-        self.query_one("#file-nav", FileNavPane).notify_file_added(path)
+        self.store[path] = data
+        self.query_one("#file-nav", FileNavPane).notify_file_added(path, data)
         self._apply_link(path)
 
     # ── File navigation ───────────────────────────────────────────────────────
@@ -1166,7 +1139,9 @@ class PfqApp(App):
     def _open_file(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
         pane.path = path
-        pane.data = load_task(path)
+        data = self.store.get(path) or load_task(path)
+        self.store[path] = data  # ensure store holds the live dict
+        pane.data = data
         pane.rows = build_rows(pane.data)
         pane._refresh_title()
         pane._rebuild()
