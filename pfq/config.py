@@ -1,7 +1,10 @@
-# Allowed fields in display order.
+from __future__ import annotations
+from dataclasses import dataclass
+
+
+# Scalar / text fields (displayed as rows in the task pane)
 # "str"  = single-line value
 # "text" = multiline free-form text
-# "list" = list of items
 FIELDS: dict[str, str] = {
     "description": "str",
     "type":        "str",
@@ -9,22 +12,29 @@ FIELDS: dict[str, str] = {
     "start_date":  "str",
     "due_date":    "str",
     "notes":       "text",
-    "why":         "list",
-    "need":        "list",
-    "how":         "list",
-    "but":         "list",
-    "or":          "list",
-    "required_by": "list",
 }
 
-# Bidirectional inverse pairs — when linking B from field F of A,
-# a backlink is automatically added to B's INVERSE_FIELDS[F].
-INVERSE_FIELDS: dict[str, str] = {
-    "how":         "why",
-    "why":         "how",
-    "need":        "required_by",
-    "required_by": "need",
-}
+
+@dataclass
+class LinkType:
+    name: str
+    backlink: str | None   # name of inverse link type, or None
+    direction: str         # "up" | "down" | "lateral"
+    label: str             # display label in UI
+    sort_order: int        # display order in the links section (lower = first)
+
+
+LINK_TYPES: list[LinkType] = [
+    LinkType("why",            "how",            "up",      "why",           -2),
+    LinkType("how",            "why",            "down",    "how",            2),
+    LinkType("need",           "required_by",    "down",    "need",           1),
+    LinkType("required_by",    "need",           "up",      "required by",   -1),
+    LinkType("but",            None,             "lateral", "but",            0),
+    LinkType("alternative_to", "alternative_to", "lateral", "alternative to", 0),
+]
+
+LINK_TYPE_MAP: dict[str, LinkType] = {lt.name: lt for lt in LINK_TYPES}
+
 
 # status → (label, rich style)
 STATUSES: dict[str, tuple[str, str]] = {

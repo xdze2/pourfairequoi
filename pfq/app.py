@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -23,16 +22,14 @@ from textual.widgets import (
     Static,
 )
 
-from .config import FIELDS, INVERSE_FIELDS, STATUSES, TYPES
+from .config import FIELDS, LINK_TYPES, LINK_TYPE_MAP, STATUSES, TYPES
 from .model import (
-    add_backlink,
-    extract_link,
-    find_file_by_id,
+    find_path_by_id,
+    get_links,
     get_task_id,
     load_all,
     load_task,
     new_filepath,
-    remove_backlink,
     save_task,
 )
 
@@ -101,67 +98,63 @@ class ConfirmModal(ModalScreen[bool]):
 
 @dataclass
 class Row:
-    kind: str  # "header" | "simple" | "text" | "item" | "add"
-    field: str
-    idx: int | None
+    kind: str  # "simple" | "text" | "link_header" | "link_item" | "link_add"
+    field: str  # field name for simple/text; link type name for link rows
+    idx: int | None  # index in data["links"] for link_item, else None
 
     @property
     def editable(self) -> bool:
-        return self.kind in ("simple", "text", "item")
+        return self.kind in ("simple", "text", "link_item")
 
 
 def build_rows(data: dict) -> list[Row]:
     rows: list[Row] = []
-    # description is always first and always present
+    # scalar / text fields — description always first
     rows.append(Row("simple", "description", None))
     for key, ftype in FIELDS.items():
-        if key == "description":
+        if key == "description" or key not in data:
             continue
-        if key not in data:
-            continue
-        if ftype in ("str", "text"):
-            kind = "text" if ftype == "text" else "simple"
-            rows.append(Row(kind, key, None))
-        elif ftype == "list":
-            val = data.get(key)
-            if isinstance(val, list) and val:
-                rows.append(Row("header", key, None))
-                for i in range(len(val)):
-                    rows.append(Row("item", key, i))
-                rows.append(Row("add", key, None))
+        rows.append(Row("text" if ftype == "text" else "simple", key, None))
+
+    # links — grouped by type, sorted by sort_order
+    links = get_links(data)
+    present_types = []
+    seen = set()
+    for lt in sorted(LINK_TYPES, key=lambda x: x.sort_order):
+        type_links = [(i, l) for i, l in enumerate(links) if l.get("type") == lt.name]
+        if type_links:
+            if lt.name not in seen:
+                present_types.append(lt.name)
+                seen.add(lt.name)
+            rows.append(Row("link_header", lt.name, None))
+            for i, _ in type_links:
+                rows.append(Row("link_item", lt.name, i))
+            rows.append(Row("link_add", lt.name, None))
     return rows
 
 
 def get_row_text(row: Row, data: dict) -> str:
-    if row.kind == "header":
-        return f"{row.field}:"
     if row.kind in ("simple", "text"):
         return str(data.get(row.field) or "")
-    items = data.get(row.field, [])
-    if isinstance(items, list) and row.idx is not None and row.idx < len(items):
-        return str(items[row.idx] or "")
+    if row.kind == "link_item" and row.idx is not None:
+        links = get_links(data)
+        if row.idx < len(links):
+            link = links[row.idx]
+            desc = str(link.get("description", "") or "")
+            target = str(link.get("target_node", "") or "")
+            if desc and target:
+                return f"{desc} #{target}"
+            return target and f"#{target}" or desc
     return ""
 
 
 def set_row_text(row: Row, data: dict, value: str) -> None:
     if row.kind in ("simple", "text"):
         data[row.field] = value
-    elif row.kind == "item":
-        items = data.get(row.field)
-        if isinstance(items, list) and row.idx is not None and row.idx < len(items):
-            items[row.idx] = value
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _append_with_link(t: Text, text: str) -> None:
-    m = re.search(r"(\s*#\w+)\s*$", text)
-    if m:
-        t.append(text[: m.start()])
-        t.append(" " + m.group(1).strip(), style="color(8)")
-    else:
-        t.append(text)
+    elif row.kind == "link_item" and row.idx is not None:
+        links = get_links(data)
+        if row.idx < len(links):
+            links[row.idx]["description"] = value
 
 
 # ── File nav pane ─────────────────────────────────────────────────────────────
@@ -508,7 +501,9 @@ class TaskRowItem(ListItem):
 
     def _make_renderable(self) -> Text:
         text = get_row_text(self._row, self._data)
-        if self._row.kind == "text":
+        kind = self._row.kind
+
+        if kind == "text":
             t = Text(overflow="fold")
             t.append(f" ── {self._row.field} \n", style="bold cyan")
             if text:
@@ -519,17 +514,29 @@ class TaskRowItem(ListItem):
             if self.selected:
                 t.stylize("reverse")
             return t
+
         t = Text(no_wrap=True, overflow="ellipsis")
-        if self._row.kind == "header":
-            t.append(f" ── {text} ", style="bold cyan")
-        elif self._row.kind == "add":
-            t.append("    +", style="on black")
-        elif self._row.kind == "simple":
+
+        if kind == "simple":
             t.append(f" {self._row.field:<14}", style="dim")
-            _append_with_link(t, text)
-        else:
+            t.append(text)
+        elif kind == "link_header":
+            lt = LINK_TYPE_MAP.get(self._row.field)
+            label = lt.label if lt else self._row.field
+            t.append(f" ── {label} ", style="bold cyan")
+        elif kind == "link_add":
+            t.append("    +", style="dim")
+        elif kind == "link_item":
+            links = get_links(self._data)
+            link = links[self._row.idx] if self._row.idx is not None and self._row.idx < len(links) else {}
+            desc = str(link.get("description", "") or "")
+            target = str(link.get("target_node", "") or "")
             t.append("    • ")
-            _append_with_link(t, text)
+            if desc:
+                t.append(desc)
+            if target:
+                t.append(f" #{target}", style="color(8)")
+
         if self.selected:
             t.stylize("reverse")
         return t
@@ -613,8 +620,10 @@ class TaskPane(Widget, can_focus=True):
         self._items: list[TaskRowItem] = []
         self._editing: bool = False
         self._edit_original: str = ""
-        self._edit_link: str | None = None
         self._edit_is_new: bool = False
+        # pending link operation: type name + index in links list (-1 = new)
+        self._link_pending_type: str | None = None
+        self._link_pending_idx: int = -1
 
     def compose(self) -> ComposeResult:
         yield _TaskTitle(id="task-title")
@@ -677,19 +686,15 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row is None:
             return
-        if row.kind == "add":
+        if row.kind == "link_add":
             self.action_insert()
             return
-        link_id = extract_link(get_row_text(row, self.data))
-        if link_id:
-            self.app.navigate_to_id(link_id)  # type: ignore[attr-defined]
-
-    def linked_path(self) -> Path | None:
-        row = self.current_row()
-        if row is None or not self.path:
-            return None
-        link_id = extract_link(get_row_text(row, self.data))
-        return find_file_by_id(link_id, self.path.parent) if link_id else None
+        if row.kind == "link_item" and row.idx is not None:
+            links = get_links(self.data)
+            if row.idx < len(links):
+                target_id = links[row.idx].get("target_node")
+                if target_id:
+                    self.app.navigate_to_id(target_id)  # type: ignore[attr-defined]
 
     # ── Edit ──────────────────────────────────────────────────────────────────
 
@@ -700,10 +705,12 @@ class TaskPane(Widget, can_focus=True):
         item = self._current_item()
         if row and row.editable and item:
             self._editing = True
-            full_text = get_row_text(row, self.data)
-            self._edit_original = full_text
-            self._edit_link = extract_link(full_text)
-            edit_text = re.sub(r"\s*#\w+\s*$", "", full_text)
+            if row.kind == "link_item" and row.idx is not None:
+                links = get_links(self.data)
+                edit_text = str(links[row.idx].get("description", "") or "") if row.idx < len(links) else ""
+            else:
+                edit_text = get_row_text(row, self.data)
+            self._edit_original = edit_text
             item.begin_edit(edit_text)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -712,18 +719,15 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         item = self._current_item()
         if row and item:
-            value = event.value
-            if self._edit_link:
-                value = (
-                    f"{value} #{self._edit_link}" if value else f"#{self._edit_link}"
-                )
-            set_row_text(row, self.data, value)
+            set_row_text(row, self.data, event.value)
             if self.path:
                 save_task(self.path, self.data)
             item.end_edit()
+            # if description changed, refresh title bar
+            if row.field == "description":
+                self._refresh_title()
         self._editing = False
         self._edit_original = ""
-        self._edit_link = None
         self._edit_is_new = False
         self.focus()
         event.stop()
@@ -733,12 +737,10 @@ class TaskPane(Widget, can_focus=True):
             row = self.current_row()
             item = self._current_item()
             if self._edit_is_new:
-                # new item was empty — delete it
                 if item:
                     item.end_edit()
                 self._editing = False
                 self._edit_original = ""
-                self._edit_link = None
                 self._edit_is_new = False
                 self.action_delete()
             else:
@@ -748,15 +750,8 @@ class TaskPane(Widget, can_focus=True):
                     item.end_edit()
                 self._editing = False
                 self._edit_original = ""
-                self._edit_link = None
             self.focus()
             event.stop()
-
-    def set_value(self, row: Row, value: str) -> None:
-        set_row_text(row, self.data, value)
-        item = self._current_item()
-        if item:
-            item.refresh_label()
 
     # ── Insert / Delete ───────────────────────────────────────────────────────
 
@@ -764,26 +759,23 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row is None or not self.path:
             return
-        if row.kind == "header":
-            field, after = row.field, -1
-        elif row.kind == "item":
-            field, after = row.field, row.idx  # type: ignore[assignment]
-        elif row.kind == "add":
-            field = row.field
-            items = self.data.get(field, [])
-            after = (len(items) - 1) if isinstance(items, list) and items else -1
+        if row.kind not in ("link_header", "link_item", "link_add"):
+            return
+        link_type = row.field
+        links = self.data.setdefault("links", [])
+        # insert after current item, or at end of this type's group
+        if row.kind == "link_item" and row.idx is not None:
+            insert_at = row.idx + 1
         else:
-            return
-        items = self.data.setdefault(field, [])
-        if not isinstance(items, list):
-            return
-        insert_at = after + 1
-        items.insert(insert_at, "")
+            # after last link of this type
+            positions = [i for i, l in enumerate(links) if l.get("type") == link_type]
+            insert_at = (positions[-1] + 1) if positions else len(links)
+        links.insert(insert_at, {"type": link_type, "description": ""})
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
         cursor_pos = 0
         for i, r in enumerate(self.rows):
-            if r.kind == "item" and r.field == field and r.idx == insert_at:
+            if r.kind == "link_item" and r.field == link_type and r.idx == insert_at:
                 cursor_pos = i
                 break
         self._rebuild(keep_cursor=cursor_pos)
@@ -792,11 +784,19 @@ class TaskPane(Widget, can_focus=True):
 
     def action_delete(self) -> None:
         row = self.current_row()
-        if row is None or row.kind != "item" or not self.path:
+        if row is None or not self.path:
             return
-        items = self.data.get(row.field)
-        if isinstance(items, list) and row.idx is not None:
-            items.pop(row.idx)
+        if row.kind == "link_item" and row.idx is not None:
+            links = get_links(self.data)
+            if row.idx < len(links):
+                links.pop(row.idx)
+            self.data["links"] = links
+        elif row.kind == "simple" and row.field != "description":
+            self.data.pop(row.field, None)
+        elif row.kind == "text":
+            self.data.pop(row.field, None)
+        else:
+            return
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
@@ -804,18 +804,19 @@ class TaskPane(Widget, can_focus=True):
     # ── Add field ─────────────────────────────────────────────────────────────
 
     def action_add_field(self) -> None:
-        # Fields missing or empty (str/text empty, list empty or absent)
         missing = []
+        # scalar/text fields not yet present or empty
         for key, ftype in FIELDS.items():
             if key == "description":
                 continue
             val = self.data.get(key)
-            if ftype == "list":
-                if not isinstance(val, list) or not val:
-                    missing.append(key)
-            else:
-                if not val or not str(val).strip():
-                    missing.append(key)
+            if not val or not str(val).strip():
+                missing.append(key)
+        # link types not yet used
+        present_link_types = {l.get("type") for l in get_links(self.data)}
+        for lt in LINK_TYPES:
+            if lt.name not in present_link_types:
+                missing.append(lt.name)
         if missing:
             self.app.push_screen(  # type: ignore[attr-defined]
                 AddSectionModal(missing), self._on_field_chosen
@@ -824,64 +825,72 @@ class TaskPane(Widget, can_focus=True):
     def _on_field_chosen(self, field: str | None) -> None:
         if not field or not self.path:
             return
-        ftype = FIELDS[field]
-        if ftype == "list":
-            self.data[field] = [""]
+        if field in LINK_TYPE_MAP:
+            # adding a link type section — create first empty link, open edit
+            links = self.data.setdefault("links", [])
+            insert_at = len(links)
+            links.append({"type": field, "description": ""})
         else:
             self.data[field] = ""
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
-        # For lists: land on the first item (skip header); for str/text: land on the row
         cursor_pos = 0
         for i, r in enumerate(self.rows):
-            if r.field == field and r.kind != "header":
+            if r.field == field and r.kind not in ("link_header",):
                 cursor_pos = i
                 break
         self._rebuild(keep_cursor=cursor_pos)
         self._edit_is_new = True
         self.action_edit()
 
-    # ── Link navigation ───────────────────────────────────────────────────────
+    # ── Linking ───────────────────────────────────────────────────────────────
 
     def action_back_to_nav(self) -> None:
         if not self._editing:
             self.app._show_file_nav()  # type: ignore[attr-defined]
 
     def action_link(self) -> None:
-        if self._editing:
+        """Open link picker. If on a link row, use that type; else ask for type first."""
+        if self._editing or not self.path:
             return
         row = self.current_row()
-        if self.path and row and row.editable:
-            self.app._start_linking()  # type: ignore[attr-defined]
+        if row and row.kind in ("link_header", "link_item", "link_add"):
+            link_type = row.field
+            pending_idx = row.idx if row.kind == "link_item" else -1
+            self.app._start_linking(link_type, pending_idx)  # type: ignore[attr-defined]
+        else:
+            # ask for link type first
+            available = [lt.name for lt in LINK_TYPES]
+            self.app.push_screen(  # type: ignore[attr-defined]
+                AddSectionModal(available, title="Link type:"),
+                self._on_link_type_chosen,
+            )
+
+    def _on_link_type_chosen(self, link_type: str | None) -> None:
+        if link_type and self.path:
+            self.app._start_linking(link_type, -1)  # type: ignore[attr-defined]
 
     def action_unlink(self) -> None:
+        """Clear target_node from the current link_item."""
         if self._editing:
             return
         row = self.current_row()
-        if row is None or not self.path:
+        if row is None or row.kind != "link_item" or row.idx is None or not self.path:
             return
-        text = get_row_text(row, self.data)
-        if not extract_link(text):
-            return
-        self.app.push_screen(  # type: ignore[attr-defined]
-            ConfirmModal("Remove this link?"),
-            lambda ok: self._on_unlink_confirmed(ok, row, text),
-        )
+        links = get_links(self.data)
+        if row.idx < len(links) and links[row.idx].get("target_node"):
+            self.app.push_screen(  # type: ignore[attr-defined]
+                ConfirmModal("Remove target from this link?"),
+                lambda ok: self._on_unlink_confirmed(ok, row.idx),
+            )
 
-    def _on_unlink_confirmed(self, ok: bool, row: Row, original: str) -> None:
-        if not ok:
+    def _on_unlink_confirmed(self, ok: bool, idx: int) -> None:
+        if not ok or not self.path:
             return
-        link_id = extract_link(original)
-        if link_id and row.field in INVERSE_FIELDS and self.path:
-            target = find_file_by_id(link_id, self.path.parent)
-            if target:
-                remove_backlink(
-                    target, INVERSE_FIELDS[row.field], get_task_id(self.path)
-                )
-        clean = re.sub(r"\s*#\w+\s*$", "", original)
-        set_row_text(row, self.data, clean)
-        if self.path:
-            save_task(self.path, self.data)
+        links = get_links(self.data)
+        if idx < len(links):
+            links[idx].pop("target_node", None)
+        save_task(self.path, self.data)
         item = self._current_item()
         if item:
             item.refresh_label()
@@ -901,13 +910,14 @@ class AddSectionModal(ModalScreen[Optional[str]]):
     """
     BINDINGS = [Binding("escape", "dismiss", show=False)]
 
-    def __init__(self, available: list[str]) -> None:
+    def __init__(self, available: list[str], title: str = "Add field:") -> None:
         super().__init__()
         self._available = available
+        self._title = title
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal-box"):
-            yield Label("Add field:")
+            yield Label(self._title)
             with ListView():
                 for name in self._available:
                     yield ListItem(Label(name), id=f"section-{name}")
@@ -1058,7 +1068,10 @@ class PfqApp(App):
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
-    def _start_linking(self) -> None:
+    def _start_linking(self, link_type: str, link_idx: int) -> None:
+        pane = self.query_one("#task-pane", TaskPane)
+        pane._link_pending_type = link_type
+        pane._link_pending_idx = link_idx
         picker = self.query_one("#link-picker", LinkPickerPane)
         picker.refresh_files()
         picker.cursor = 0
@@ -1070,33 +1083,22 @@ class PfqApp(App):
 
     def _apply_link(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
-        row = pane.current_row()
-        if not (row and row.editable and pane.path):
+        if not pane.path or pane._link_pending_type is None:
             self._cancel_link()
             return
-
         target_id = get_task_id(path)
-        current = get_row_text(row, pane.data)
-
-        old_id = extract_link(current)
-        if old_id and row.field in INVERSE_FIELDS:
-            old_target = find_file_by_id(old_id, pane.path.parent)
-            if old_target:
-                remove_backlink(
-                    old_target, INVERSE_FIELDS[row.field], get_task_id(pane.path)
-                )
-
-        clean = re.sub(r"\s*#\w+\s*$", "", current)
-        pane.set_value(row, f"{clean} #{target_id}")
+        link_type = pane._link_pending_type
+        link_idx = pane._link_pending_idx
+        links = pane.data.setdefault("links", [])
+        if link_idx >= 0 and link_idx < len(links):
+            links[link_idx]["target_node"] = target_id
+        else:
+            links.append({"type": link_type, "target_node": target_id})
         save_task(pane.path, pane.data)
-
-        if row.field in INVERSE_FIELDS:
-            source_desc = str(pane.data.get("description", ""))
-            add_backlink(
-                path, INVERSE_FIELDS[row.field], get_task_id(pane.path), source_desc
-            )
-            self.store[path] = load_task(path)  # refresh backlink target in store
-
+        pane.rows = build_rows(pane.data)
+        pane._rebuild(keep_cursor=pane._cursor_idx)
+        pane._link_pending_type = None
+        pane._link_pending_idx = -1
         self._cancel_link()
 
     def _cancel_link(self) -> None:
@@ -1106,19 +1108,12 @@ class PfqApp(App):
             self.query_one("#task-pane", TaskPane).focus()
 
     def _create_and_link(self) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        row = pane.current_row()
-        default = ""
-        if row and row.editable:
-            raw = get_row_text(row, pane.data)
-            default = re.sub(r"\s*#\w+\s*$", "", raw).strip()
-        self.push_screen(NewTaskModal(default=default), self._on_new_task_for_link)
+        self.push_screen(NewTaskModal(), self._on_new_task_for_link)
 
     def _on_new_task_for_link(self, description: str | None) -> None:
         if not description:
             return
         from datetime import date
-
         vault = self.query_one("#file-nav", FileNavPane).vault
         path = new_filepath(description, vault)
         data: dict = {
@@ -1127,9 +1122,6 @@ class PfqApp(App):
             "status": "todo",
             "start_date": date.today().isoformat(),
         }
-        for key, ftype in FIELDS.items():
-            if ftype == "list" and key not in data:
-                data[key] = []
         save_task(path, data)
         self.store[path] = data
         self.query_one("#file-nav", FileNavPane).notify_file_added(path, data)
@@ -1145,7 +1137,7 @@ class PfqApp(App):
         pane = self.query_one("#task-pane", TaskPane)
         if not pane.path:
             return
-        target = find_file_by_id(link_id, pane.path.parent)
+        target = find_path_by_id(link_id, self.store)
         if target:
             self._history.append(pane.path)
             self._open_file(target)
