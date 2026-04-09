@@ -78,6 +78,101 @@ def find_path_by_id(task_id: str, store: dict[Path, dict]) -> Path | None:
     return None
 
 
+def traverse_subgraph(
+    start_path: Path,
+    store: dict[Path, dict],
+    direction: str,  # "up" (follow why links) or "down" (follow how links)
+) -> list[dict]:
+    """
+    BFS traversal from start_path following links of a given direction.
+    Returns a list of node dicts, each with:
+      - path, data, description, status, depth, in_degree, display_indent
+    Nodes without target_node (plain annotations) are included at depth 1, in_degree 1.
+    """
+    link_type = "why" if direction == "up" else "how"
+
+    # Map ID -> path for fast lookup
+    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
+
+    # BFS: collect (path, depth) for each visited node (first visit = min depth)
+    visited: dict[Path, int] = {}  # path -> min depth
+    in_degree: dict[Path, int] = {}  # path -> how many nodes in subgraph reference it
+    queue: list[tuple[Path, int]] = []
+
+    # Seed from the start node's links of the target type
+    start_data = store.get(start_path, {})
+    for link in get_links(start_data):
+        if link.get("type") != link_type:
+            continue
+        target_id = link.get("target_node")
+        if target_id:
+            target_path = id_to_path.get(target_id.upper())
+            if target_path and target_path != start_path:
+                if target_path not in visited:
+                    visited[target_path] = 1
+                    queue.append((target_path, 1))
+                in_degree[target_path] = in_degree.get(target_path, 0) + 1
+        else:
+            # Plain annotation — no path, represented as a synthetic entry
+            pass
+
+    # Also collect plain annotations (no target_node) separately
+    annotations: list[dict] = []
+    for link in get_links(start_data):
+        if link.get("type") != link_type:
+            continue
+        if not link.get("target_node"):
+            annotations.append({
+                "path": None,
+                "data": {},
+                "description": str(link.get("description", "") or ""),
+                "status": "",
+                "depth": 1,
+                "in_degree": 1,
+                "display_indent": 1,
+            })
+
+    # BFS expansion
+    head = 0
+    while head < len(queue):
+        current_path, current_depth = queue[head]
+        head += 1
+        current_data = store.get(current_path, {})
+        for link in get_links(current_data):
+            if link.get("type") != link_type:
+                continue
+            target_id = link.get("target_node")
+            if not target_id:
+                continue
+            target_path = id_to_path.get(target_id.upper())
+            if not target_path or target_path == start_path:
+                continue
+            in_degree[target_path] = in_degree.get(target_path, 0) + 1
+            if target_path not in visited:
+                new_depth = current_depth + 1
+                visited[target_path] = new_depth
+                queue.append((target_path, new_depth))
+
+    # Build result list, sort by (display_indent, -in_degree, depth)
+    result: list[dict] = list(annotations)
+    for path, depth in visited.items():
+        deg = in_degree.get(path, 1)
+        data = store.get(path, {})
+        display_indent = max(1, depth - (deg - 1))
+        result.append({
+            "path": path,
+            "data": data,
+            "description": str(data.get("description", "") or get_task_id(path)),
+            "status": str(data.get("status", "") or ""),
+            "depth": depth,
+            "in_degree": deg,
+            "display_indent": display_indent,
+        })
+
+    result.sort(key=lambda n: (n["display_indent"], -n["in_degree"], n["depth"]))
+    return result
+
+
 def get_links(data: dict) -> list[dict]:
     """Return the links list from a task dict, always as a list."""
     links = data.get("links")

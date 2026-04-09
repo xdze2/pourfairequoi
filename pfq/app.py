@@ -31,6 +31,7 @@ from .model import (
     load_task,
     new_filepath,
     save_task,
+    traverse_subgraph,
 )
 
 
@@ -896,6 +897,113 @@ class TaskPane(Widget, can_focus=True):
             item.refresh_label()
 
 
+# ── Context pane ──────────────────────────────────────────────────────────────
+
+STATUS_SYMBOLS: dict[str, str] = {
+    "todo":      "·",
+    "active":    "▶",
+    "stuck":     "!",
+    "done":      "✓",
+    "discarded": "×",
+}
+
+
+class ContextPane(Widget):
+    """Read-only right panel showing the local why/how subgraph."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._path: Path | None = None
+        self._store: dict[Path, dict] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="context-content")
+
+    def update_context(self, path: Path | None, store: dict[Path, dict]) -> None:
+        self._path = path
+        self._store = store
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        try:
+            widget = self.query_one("#context-content", Static)
+        except Exception:
+            return
+        if not self._path:
+            widget.update("")
+            return
+
+        data = self._store.get(self._path, {})
+        desc = str(data.get("description", "") or "")
+        status = str(data.get("status", "") or "")
+        node_type = str(data.get("type", "") or "")
+
+        why_nodes = traverse_subgraph(self._path, self._store, "up")
+        how_nodes = traverse_subgraph(self._path, self._store, "down")
+
+        t = Text(overflow="fold")
+
+        # ── why subgraph ──────────────────────────────────────────────────────
+        t.append("── why ", style="bold cyan")
+        t.append("─" * 20 + "\n", style="dim")
+        if why_nodes:
+            for node in why_nodes:
+                self._append_node(t, node)
+        else:
+            t.append("  (none)\n", style="dim")
+
+        # ── current node ──────────────────────────────────────────────────────
+        t.append("\n")
+        sym = STATUS_SYMBOLS.get(status, "·")
+        t.append(f" {sym} ", style=STATUS_STYLES.get(status, "dim"))
+        t.append(desc or "—", style="bold")
+        if node_type:
+            t.append(f"  {node_type}", style=TYPE_STYLES.get(node_type, "dim"))
+        t.append("\n\n")
+
+        # ── how subgraph ──────────────────────────────────────────────────────
+        t.append("── how ", style="bold cyan")
+        t.append("─" * 20 + "\n", style="dim")
+        if how_nodes:
+            for node in how_nodes:
+                self._append_node(t, node)
+        else:
+            t.append("  (none)\n", style="dim")
+
+        # ── statistics ───────────────────────────────────────────────────────
+        all_nodes = why_nodes + how_nodes
+        if all_nodes:
+            counts: dict[str, int] = {}
+            for node in all_nodes:
+                s = node["status"] or "?"
+                counts[s] = counts.get(s, 0) + 1
+            t.append("\n")
+            t.append("─" * 27 + "\n", style="dim")
+            total = len(all_nodes)
+            t.append(f" {total} node{'s' if total != 1 else ''}  ", style="dim")
+            parts = []
+            for s, sym in STATUS_SYMBOLS.items():
+                if s in counts:
+                    parts.append((f"{sym}{counts[s]}", STATUS_STYLES.get(s, "dim")))
+            for i, (part_text, part_style) in enumerate(parts):
+                if i:
+                    t.append("  ")
+                t.append(part_text, style=part_style)
+            t.append("\n")
+
+        widget.update(t)
+
+    def _append_node(self, t: Text, node: dict) -> None:
+        indent = "  " * node["display_indent"]
+        sym = STATUS_SYMBOLS.get(node["status"], " ") if node["status"] else " "
+        style = STATUS_STYLES.get(node["status"], "dim") if node["status"] else "dim"
+        t.append(f"{indent}{sym} ", style=style)
+        t.append(node["description"] or "—")
+        if node["in_degree"] > 1:
+            t.append(f"  ×{node['in_degree']}", style="dim")
+        t.append("\n")
+
+
 # ── Add-section modal ─────────────────────────────────────────────────────────
 
 
@@ -938,8 +1046,25 @@ Screen { layout: vertical; }
     height: 1fr;
 }
 
+#mid-col {
+    width: 2fr;
+    height: 1fr;
+}
+
 #right-switcher {
     width: 2fr;
+    height: 1fr;
+}
+
+ContextPane {
+    width: 1fr;
+    height: 1fr;
+    border: solid $surface-lighten-2;
+    padding: 0 1;
+    layout: vertical;
+}
+
+ContextPane > Static {
     height: 1fr;
 }
 
@@ -1041,12 +1166,16 @@ class PfqApp(App):
                 FileNavPane(vault, self.store, id="file-nav"),
                 id="left-col",
             ),
-            ContentSwitcher(
-                TaskPane(self._initial_path, id="task-pane"),
-                LinkPickerPane(vault, self.store, id="link-picker"),
-                initial="task-pane",
-                id="right-switcher",
+            Vertical(
+                ContentSwitcher(
+                    TaskPane(self._initial_path, id="task-pane"),
+                    LinkPickerPane(vault, self.store, id="link-picker"),
+                    initial="task-pane",
+                    id="right-switcher",
+                ),
+                id="mid-col",
             ),
+            ContextPane(id="context-pane"),
             id="panes",
         )
         yield Footer()
@@ -1100,6 +1229,7 @@ class PfqApp(App):
         pane._link_pending_type = None
         pane._link_pending_idx = -1
         self._cancel_link()
+        self._refresh_context()
 
     def _cancel_link(self) -> None:
         right = self.query_one("#right-switcher", ContentSwitcher)
@@ -1146,6 +1276,10 @@ class PfqApp(App):
         if self._history:
             self._open_file(self._history.pop())
 
+    def _refresh_context(self) -> None:
+        pane = self.query_one("#task-pane", TaskPane)
+        self.query_one("#context-pane", ContextPane).update_context(pane.path, self.store)
+
     def _open_file(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
         pane.path = path
@@ -1158,3 +1292,4 @@ class PfqApp(App):
         nav = self.query_one("#file-nav", FileNavPane)
         if path in nav._files:
             nav.cursor = nav._files.index(path)
+        self._refresh_context()

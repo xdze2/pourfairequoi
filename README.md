@@ -105,15 +105,25 @@ Fields and valid statuses are defined in `config.py`. This allows customising th
 
 ## UI
 
-Terminal-based (Unix), two-column layout (1/3 — 2/3).
+Terminal-based (Unix), three-column layout.
 
-**Left column:**
+All files are loaded into memory at startup for fast search and graph traversal.
+
+**Left column (1fr):**
 - **App header** — app title
 - **File list** — browse and search all tasks, showing description, type and status
 
-**Right column** — switches between:
+**Middle column (2fr)** — switches between:
 - **Task view** — parsed view of the open task, one line selected at a time
 - **Link picker** — file list for creating a link (activated with `l`)
+
+**Right column (1fr) — context pane (read-only, auto-updated):**
+- **Why subgraph** — all nodes reachable upward via `why` links (BFS, flattened)
+- **Current node** — description, type, status
+- **How subgraph** — all nodes reachable downward via `how` links (BFS, flattened)
+- **Statistics** — node counts by status across both subgraphs
+
+Indentation in the subgraphs reflects depth from the current node, reduced for nodes cited multiple times (shared sub-goals or shared steps). A `×N` marker indicates a node referenced by N parents in the subgraph.
 
 **Bottom bar:** key bindings reference (Textual footer).
 
@@ -194,8 +204,9 @@ pfq new "my first task"
 
 ### v0.3 — in progress
 - New data model: `type` (goal / task / constraint), `due_date`, `notes`
-- Preload all files into memory at startup for fast search and richer list view
-- Two-column layout: left = app header + file list, right = task view / link picker
+- Preload all files into memory at startup for fast search and graph traversal
+- Three-column layout: file list | task view / link picker | context pane
+- Context pane: local why/how subgraph with BFS traversal, indentation by depth, statistics
 
 ### Later
 - Show type and due date in file list
