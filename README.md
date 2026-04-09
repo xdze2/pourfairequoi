@@ -61,30 +61,36 @@ due_date: '2026-06-01'               # deadline or scheduled date (optional)
 notes: |                              # free-form multiline text
   Started this after watching a restoration video.
   Main challenge is sourcing the original capacitors.
-why:
-    - fun
-    - learn stuff
-how:
-    - get elec gear: soldering iron, voltmeter
-    - build the new electronics #R4DIO_elec
-but:
-    - budget <300 euros
-    - risk stopping midcourse
-or:
-    - Start a less complex build (alarm clock)
-required_by:
-    - personal projects showcase #A1B2C3
+links:
+- type: why
+  description: fun
+- type: why
+  description: learn stuff
+- type: how
+  description: get elec gear
+- type: how
+  description: build the new electronics
+  target_node: R4DIO1               # optional: 6-char ID of the linked node
+- type: but
+  description: budget <300 euros
+- type: or
+  description: Start a less complex build (alarm clock)
 ```
 
 ### Linking
 
-A line ending with `#task_id` links to another file. The ID is resolved by scanning the `data/` directory (supports up to ~500 files). Each line can have at most one link.
+Links are stored in a unified `links` list. Each entry has:
+- `type` — the link kind: `why`, `how`, `but`, `or`, etc.
+- `description` — free-form text label
+- `target_node` — (optional) the 6-character ID of another node in `data/`
+
+A link without `target_node` is a plain annotation (no file reference).
 
 ### Backlinks
 
-Some fields have a defined inverse. When a link is created or removed via the TUI, the corresponding backlink in the target file is automatically maintained:
+Some link types have a defined inverse. When a link is created or removed via the TUI, the corresponding backlink in the target file is automatically maintained:
 
-| Field | Inverse |
+| Type | Inverse |
 |---|---|
 | `how` | `why` |
 | `why` | `how` |
