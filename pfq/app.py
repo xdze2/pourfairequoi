@@ -220,20 +220,42 @@ def set_row_text(row: Row, data: dict, value: str) -> None:
 STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
 TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
 
+# Fixed column widths for chip alignment (derived from config so they stay in sync)
+_TYPE_COL = max(len(k) for k in TYPES)      # "constraint" = 10
+_STATUS_COL = max(len(k) for k in STATUSES)  # "discarded"  = 9
+_DATE_COL = 10                               # ISO-8601 date: yyyy-mm-dd
+
+
+def _pad(t: Text, text: str, width: int) -> None:
+    """Append trailing spaces to reach `width` characters (no-op if text is already wider)."""
+    gap = width - len(text)
+    if gap > 0:
+        t.append(" " * gap)
+
 
 def _append_chips(t: Text, data: dict) -> None:
-    """Append type / status / date chips to a Rich Text object (inline, dim style)."""
+    """Append type / status / date in fixed-width columns for table alignment."""
     task_type = str(data.get("type", "") or "")
     status = str(data.get("status", "") or "")
-    due = str(data.get("due_date", "") or "")
-    start = str(data.get("start_date", "") or "")
+    date = str(data.get("due_date", "") or data.get("start_date", "") or "")
+
+    t.append("  ")
     if task_type:
-        t.append(f" {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
+        t.append(task_type.ljust(_TYPE_COL), style=TYPE_STYLES.get(task_type, "dim"))
+    else:
+        t.append(" " * _TYPE_COL)
+
+    t.append("  ")
     if status:
-        t.append(f" {status}", style=STATUS_STYLES.get(status, "dim"))
-    date = due or start
+        t.append(status.ljust(_STATUS_COL), style=STATUS_STYLES.get(status, "dim"))
+    else:
+        t.append(" " * _STATUS_COL)
+
+    t.append("  ")
     if date:
-        t.append(f" {date}", style="dim")
+        t.append(date, style="dim")
+    else:
+        t.append(" " * _DATE_COL)
 
 
 class _AppHeader(Static):
@@ -563,11 +585,13 @@ class TaskRowItem(ListItem):
 
     selected: reactive[bool] = reactive(False)
 
-    def __init__(self, row: Row, data: dict, store: dict | None = None, **kwargs) -> None:
+    def __init__(self, row: Row, data: dict, store: dict | None = None,
+                 link_desc_width: int = 0, **kwargs) -> None:
         super().__init__(**kwargs)
         self._row = row
         self._data = data
         self._store = store or {}
+        self._link_desc_width = link_desc_width
 
     def compose(self) -> ComposeResult:
         yield Label(self._make_renderable(), id="row-label")
@@ -613,16 +637,16 @@ class TaskRowItem(ListItem):
             entry = how[self._row.idx] if self._row.idx is not None and self._row.idx < len(how) else {}
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
+            own_desc = str(entry.get("description", "") or "")
             t.append("    • ")
-            if desc:
-                own_desc = str(entry.get("description", "") or "")
-                t.append(desc, style="" if own_desc else "dim")
+            t.append(desc, style="" if own_desc else "dim")
+            _pad(t, desc, self._link_desc_width)
             if kind == "how_item" and target:
                 target_path = find_path_by_id(target, self._store)
                 if target_path:
                     _append_chips(t, self._store.get(target_path, {}))
-                t.append(f" #{target}", style="color(8)")
-            elif kind == "how_inline":
+                t.append(f"  #{target}", style="color(8)")
+            else:
                 _append_chips(t, entry)
 
         elif kind == "constrain_header":
@@ -638,15 +662,15 @@ class TaskRowItem(ListItem):
             entry = constrain[self._row.idx] if self._row.idx is not None and self._row.idx < len(constrain) else {}
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
+            own_desc = str(entry.get("description", "") or "")
             t.append("    • ")
-            if desc:
-                own_desc = str(entry.get("description", "") or "")
-                t.append(desc, style="" if own_desc else "dim")
+            t.append(desc, style="" if own_desc else "dim")
+            _pad(t, desc, self._link_desc_width)
             if target:
                 target_path = find_path_by_id(target, self._store)
                 if target_path:
                     _append_chips(t, self._store.get(target_path, {}))
-                t.append(f" #{target}", style="color(8)")
+                t.append(f"  #{target}", style="color(8)")
             else:
                 _append_chips(t, entry)
 
@@ -654,8 +678,10 @@ class TaskRowItem(ListItem):
             t.append(" ── why ", style="bold magenta")
 
         elif kind == "why_item":
+            desc = self._row.backlink_desc or "—"
             t.append("    ← ", style="magenta")
-            t.append(self._row.backlink_desc or "—")
+            t.append(desc)
+            _pad(t, desc, self._link_desc_width)
             if self._row.backlink_path:
                 _append_chips(t, self._store.get(self._row.backlink_path, {}))
 
@@ -799,8 +825,20 @@ class TaskPane(Widget, can_focus=True):
         all_rows = scalar_rows + why_rows + section_rows
         self._all_rows = all_rows
         self._cursor_idx = min(keep_cursor, len(all_rows) - 1) if all_rows else 0
+
+        # Compute max description width across all link rows for column alignment
+        _link_kinds = {"how_item", "how_inline", "constrain_item"}
+        link_desc_width = 0
+        for row in all_rows:
+            if row.kind in _link_kinds:
+                d = get_row_text(row, self.data, store=self.app.store)
+                link_desc_width = max(link_desc_width, len(d))
+            elif row.kind == "why_item":
+                link_desc_width = max(link_desc_width, len(row.backlink_desc or ""))
+
         for i, row in enumerate(all_rows):
-            item = TaskRowItem(row, self.data, store=self.app.store)
+            item = TaskRowItem(row, self.data, store=self.app.store,
+                               link_desc_width=link_desc_width)
             item.selected = i == self._cursor_idx
             self._items.append(item)
             lv.append(item)
