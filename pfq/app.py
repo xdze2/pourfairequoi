@@ -24,7 +24,6 @@ from textual.widgets import (
 
 from .config import FIELDS, LINK_TYPES, LINK_TYPE_MAP, STATUSES, TYPES
 from .model import (
-    add_backlink,
     find_path_by_id,
     get_links,
     get_task_id,
@@ -103,8 +102,12 @@ class ConfirmModal(ModalScreen[bool]):
 @dataclass
 class Row:
     kind: str  # "simple" | "text" | "link_header" | "link_item" | "link_add"
+               # | "backlink_header" | "backlink_item"
     field: str  # field name for simple/text; link type name for link rows
     idx: int | None  # index in data["links"] for link_item, else None
+    # for backlink_item: the path and description of the referring node
+    backlink_path: "Path | None" = None
+    backlink_desc: str = ""
 
     @property
     def editable(self) -> bool:
@@ -134,6 +137,41 @@ def build_rows(data: dict) -> list[Row]:
             for i, _ in type_links:
                 rows.append(Row("link_item", lt.name, i))
             rows.append(Row("link_add", lt.name, None))
+    return rows
+
+
+def build_backlink_rows(path: "Path", store: dict) -> list[Row]:
+    """Derive backlink rows by scanning the store for nodes that link to path."""
+    from .config import LINK_TYPE_MAP
+    current_id = get_task_id(path).upper()
+    # group: inverse_link_type -> list of (src_path, src_desc, link_type)
+    groups: dict[str, list[tuple]] = {}
+    for src_path, src_data in store.items():
+        if src_path == path:
+            continue
+        src_id = get_task_id(src_path).upper()
+        src_desc = str(src_data.get("description", "") or src_id)
+        for link in get_links(src_data):
+            if (link.get("target_node") or "").upper() != current_id:
+                continue
+            ltype = link.get("type", "")
+            lt = LINK_TYPE_MAP.get(ltype)
+            inverse = lt.backlink if lt else None
+            display_as = inverse or ltype  # fall back to same type if no inverse
+            groups.setdefault(display_as, []).append((src_path, src_desc, ltype))
+
+    if not groups:
+        return []
+
+    rows: list[Row] = []
+    rows.append(Row("backlink_header", "", None))
+    for inverse_type, refs in sorted(groups.items()):
+        lt = LINK_TYPE_MAP.get(inverse_type)
+        label = lt.label if lt else inverse_type
+        rows.append(Row("backlink_header", label, None))
+        for src_path, src_desc, _ in refs:
+            rows.append(Row("backlink_item", inverse_type, None,
+                            backlink_path=src_path, backlink_desc=src_desc))
     return rows
 
 
@@ -564,6 +602,15 @@ class TaskRowItem(ListItem):
                 t.append(desc, style="" if own_desc else "dim")
             if target:
                 t.append(f" #{target}", style="color(8)")
+        elif kind == "backlink_header":
+            label = self._row.field
+            if label:
+                t.append(f" ── {label} ", style="bold magenta")
+            else:
+                t.append(" ── referenced by ", style="bold magenta")
+        elif kind == "backlink_item":
+            t.append("    ← ", style="magenta")
+            t.append(self._row.backlink_desc or "—", style="dim")
 
         if self.selected:
             t.stylize("reverse")
@@ -644,6 +691,7 @@ class TaskPane(Widget, can_focus=True):
         self.path = path
         self.data: dict = load_task(path) if path else {}
         self.rows: list[Row] = build_rows(self.data)
+        self._all_rows: list[Row] = list(self.rows)
         self._cursor_idx: int = 0
         self._items: list[TaskRowItem] = []
         self._editing: bool = False
@@ -675,8 +723,15 @@ class TaskPane(Widget, can_focus=True):
         lv = self._lv()
         lv.clear()
         self._items = []
-        self._cursor_idx = min(keep_cursor, len(self.rows) - 1) if self.rows else 0
-        for i, row in enumerate(self.rows):
+        all_rows = list(self.rows)
+        if self.path:
+            try:
+                all_rows += build_backlink_rows(self.path, self.app.store)
+            except Exception:
+                pass
+        self._all_rows = all_rows
+        self._cursor_idx = min(keep_cursor, len(all_rows) - 1) if all_rows else 0
+        for i, row in enumerate(all_rows):
             item = TaskRowItem(row, self.data, store=self.app.store)
             item.selected = i == self._cursor_idx
             self._items.append(item)
@@ -692,8 +747,9 @@ class TaskPane(Widget, can_focus=True):
 
     def current_row(self) -> Row | None:
         idx = self._cursor_idx
-        if 0 <= idx < len(self.rows):
-            return self.rows[idx]
+        rows = getattr(self, "_all_rows", self.rows)
+        if 0 <= idx < len(rows):
+            return rows[idx]
         return None
 
     def _current_item(self) -> TaskRowItem | None:
@@ -705,7 +761,8 @@ class TaskPane(Widget, can_focus=True):
             self._set_cursor(self._cursor_idx - 1)
 
     def action_cursor_down(self) -> None:
-        if self._cursor_idx < len(self.rows) - 1:
+        rows = getattr(self, "_all_rows", self.rows)
+        if self._cursor_idx < len(rows) - 1:
             self._set_cursor(self._cursor_idx + 1)
 
     def action_follow_link(self) -> None:
@@ -723,6 +780,8 @@ class TaskPane(Widget, can_focus=True):
                 target_id = links[row.idx].get("target_node")
                 if target_id:
                     self.app.navigate_to_id(target_id)  # type: ignore[attr-defined]
+        if row.kind == "backlink_item" and row.backlink_path:
+            self.app._open_file(row.backlink_path)  # type: ignore[attr-defined]
 
     # ── Edit ──────────────────────────────────────────────────────────────────
 
@@ -1260,8 +1319,6 @@ class PfqApp(App):
             new_link = {"type": link_type, "target_node": target_id}
             links.append(new_link)
         save_task(pane.path, pane.data)
-        # create backlink in target file
-        add_backlink(pane.path, pane.data, new_link, self.store)
         pane.rows = build_rows(pane.data)
         pane._rebuild(keep_cursor=pane._cursor_idx)
         pane._link_pending_type = None

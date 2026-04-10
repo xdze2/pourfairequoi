@@ -146,92 +146,6 @@ def sort_globally(store: dict[Path, dict]) -> list[tuple[Path, int]]:
     return result
 
 
-def check_links(store: dict[Path, dict]) -> list[dict]:
-    """
-    Find all missing backlinks and broken target_node references.
-    Returns a list of issue dicts with keys:
-      kind: "missing_backlink" | "broken_ref"
-      src_path, src_id, src_desc, link_type, target_id,
-      target_path (missing_backlink only), target_desc, backlink_type
-    """
-    from .config import LINK_TYPE_MAP
-    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
-    issues: list[dict] = []
-
-    for path, data in store.items():
-        src_id = get_task_id(path)
-        src_desc = str(data.get("description", src_id) or src_id)
-        for link in get_links(data):
-            ltype = link.get("type", "")
-            target_id = link.get("target_node")
-            if not target_id:
-                continue
-            target_path = id_to_path.get(target_id.upper())
-            if not target_path:
-                issues.append({
-                    "kind": "broken_ref",
-                    "src_path": path, "src_id": src_id, "src_desc": src_desc,
-                    "link_type": ltype, "target_id": target_id,
-                })
-                continue
-            lt = LINK_TYPE_MAP.get(ltype)
-            if not lt or not lt.backlink:
-                continue
-            backlink_type = lt.backlink
-            target_data = store[target_path]
-            has_backlink = any(
-                l.get("type") == backlink_type
-                and (l.get("target_node", "") or "").upper() == src_id.upper()
-                for l in get_links(target_data)
-            )
-            if not has_backlink:
-                issues.append({
-                    "kind": "missing_backlink",
-                    "src_path": path, "src_id": src_id, "src_desc": src_desc,
-                    "link_type": ltype, "target_id": target_id,
-                    "target_path": target_path,
-                    "target_desc": str(target_data.get("description", target_id) or target_id),
-                    "backlink_type": backlink_type,
-                })
-    return issues
-
-
-def add_backlink(src_path: Path, src_data: dict, link: dict, store: dict[Path, dict]) -> bool:
-    """
-    Given a link in src_data pointing to a target, add the inverse link in the target file.
-    Returns True if a backlink was added, False if it already existed or not applicable.
-    """
-    from .config import LINK_TYPE_MAP
-    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
-    ltype = link.get("type", "")
-    target_id = link.get("target_node")
-    if not target_id:
-        return False
-    lt = LINK_TYPE_MAP.get(ltype)
-    if not lt or not lt.backlink:
-        return False
-    target_path = id_to_path.get(target_id.upper())
-    if not target_path:
-        return False
-    target_data = store[target_path]
-    backlink_type = lt.backlink
-    src_id = get_task_id(src_path)
-    already = any(
-        l.get("type") == backlink_type
-        and (l.get("target_node", "") or "").upper() == src_id.upper()
-        for l in get_links(target_data)
-    )
-    if already:
-        return False
-    src_desc = str(src_data.get("description", "") or "")
-    target_data.setdefault("links", []).append({
-        "type": backlink_type,
-        "description": src_desc,
-        "target_node": src_id,
-    })
-    save_task(target_path, target_data)
-    return True
-
 
 def score_tasks(query: str, store: dict[Path, dict]) -> dict[Path, float]:
     """
@@ -263,92 +177,95 @@ def score_tasks(query: str, store: dict[Path, dict]) -> dict[Path, float]:
 def traverse_subgraph(
     start_path: Path,
     store: dict[Path, dict],
-    direction: str,  # "up" (follow why links) or "down" (follow how links)
+    direction: str,  # "up" (ancestors via why) or "down" (children via why in reverse)
 ) -> list[dict]:
     """
-    BFS traversal from start_path following links of a given direction.
-    Returns a list of node dicts, each with:
-      - path, data, description, status, depth, in_degree, display_indent
-    Nodes without target_node (plain annotations) are included at depth 1, in_degree 1.
-    """
-    link_type = "why" if direction == "up" else "how"
+    BFS traversal from start_path.
 
-    # Map ID -> path for fast lookup
+    "up": follow why links declared in each node — finds motivations/goals.
+    "down": find nodes in the store that declare why → current — finds sub-tasks.
+    Both directions work without backlinks.
+
+    Returns a list of node dicts with:
+      path, data, description, status, depth, in_degree, display_indent
+    Annotations (why links without target_node) are included at depth 1 for "up" only.
+    """
     id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
 
-    # BFS: collect (path, depth) for each visited node (first visit = min depth)
-    visited: dict[Path, int] = {}  # path -> min depth
-    in_degree: dict[Path, int] = {}  # path -> how many nodes in subgraph reference it
+    def why_parents(path: Path) -> list[Path]:
+        """Nodes that `path` points to via why."""
+        result = []
+        for link in get_links(store.get(path, {})):
+            if link.get("type") != "why":
+                continue
+            tid = (link.get("target_node") or "").upper()
+            if not tid:
+                continue
+            tp = id_to_path.get(tid)
+            if tp and tp != path:
+                result.append(tp)
+        return result
+
+    def why_children(path: Path) -> list[Path]:
+        """Nodes in the store that declare why → path."""
+        path_id = get_task_id(path).upper()
+        result = []
+        for p, data in store.items():
+            if p == path:
+                continue
+            for link in get_links(data):
+                if link.get("type") == "why" and (link.get("target_node") or "").upper() == path_id:
+                    result.append(p)
+                    break
+        return result
+
+    neighbors = why_parents if direction == "up" else why_children
+
+    visited: dict[Path, int] = {}   # path -> min depth
+    in_degree: dict[Path, int] = {} # how many nodes in subgraph point to this one
     queue: list[tuple[Path, int]] = []
 
-    # Seed from the start node's links of the target type
-    start_data = store.get(start_path, {})
-    for link in get_links(start_data):
-        if link.get("type") != link_type:
+    for neighbor in neighbors(start_path):
+        if neighbor == start_path:
             continue
-        target_id = link.get("target_node")
-        if target_id:
-            target_path = id_to_path.get(target_id.upper())
-            if target_path and target_path != start_path:
-                if target_path not in visited:
-                    visited[target_path] = 1
-                    queue.append((target_path, 1))
-                in_degree[target_path] = in_degree.get(target_path, 0) + 1
-        else:
-            # Plain annotation — no path, represented as a synthetic entry
-            pass
+        in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+        if neighbor not in visited:
+            visited[neighbor] = 1
+            queue.append((neighbor, 1))
 
-    # Also collect plain annotations (no target_node) separately
-    annotations: list[dict] = []
-    for link in get_links(start_data):
-        if link.get("type") != link_type:
-            continue
-        if not link.get("target_node"):
-            annotations.append({
-                "path": None,
-                "data": {},
-                "description": str(link.get("description", "") or ""),
-                "status": "",
-                "depth": 1,
-                "in_degree": 1,
-                "display_indent": 1,
-            })
-
-    # BFS expansion
     head = 0
     while head < len(queue):
         current_path, current_depth = queue[head]
         head += 1
-        current_data = store.get(current_path, {})
-        for link in get_links(current_data):
-            if link.get("type") != link_type:
+        for neighbor in neighbors(current_path):
+            if neighbor == start_path:
                 continue
-            target_id = link.get("target_node")
-            if not target_id:
-                continue
-            target_path = id_to_path.get(target_id.upper())
-            if not target_path or target_path == start_path:
-                continue
-            in_degree[target_path] = in_degree.get(target_path, 0) + 1
-            if target_path not in visited:
-                new_depth = current_depth + 1
-                visited[target_path] = new_depth
-                queue.append((target_path, new_depth))
+            in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+            if neighbor not in visited:
+                visited[neighbor] = current_depth + 1
+                queue.append((neighbor, current_depth + 1))
 
-    # Build result list, sort by (display_indent, -in_degree, depth)
+    # Plain annotations (why links with no target) — "up" only
+    annotations: list[dict] = []
+    if direction == "up":
+        for link in get_links(store.get(start_path, {})):
+            if link.get("type") == "why" and not link.get("target_node"):
+                annotations.append({
+                    "path": None, "data": {}, "status": "",
+                    "description": str(link.get("description", "") or ""),
+                    "depth": 1, "in_degree": 1, "display_indent": 1,
+                })
+
     result: list[dict] = list(annotations)
     for path, depth in visited.items():
         deg = in_degree.get(path, 1)
         data = store.get(path, {})
         display_indent = max(1, depth - (deg - 1))
         result.append({
-            "path": path,
-            "data": data,
+            "path": path, "data": data,
             "description": str(data.get("description", "") or get_task_id(path)),
             "status": str(data.get("status", "") or ""),
-            "depth": depth,
-            "in_degree": deg,
-            "display_indent": display_indent,
+            "depth": depth, "in_degree": deg, "display_indent": display_indent,
         })
 
     result.sort(key=lambda n: (n["display_indent"], -n["in_degree"], n["depth"]))

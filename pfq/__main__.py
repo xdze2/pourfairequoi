@@ -2,7 +2,8 @@ import click
 from pathlib import Path
 
 from .app import PfqApp
-from .model import add_backlink, check_links, load_all, migrate_task, new_filepath, save_task
+from .model import load_all, migrate_task, new_filepath, save_task
+from .config import LINK_TYPE_MAP
 
 
 @click.group(invoke_without_command=True)
@@ -113,61 +114,58 @@ def clean(vault: Path, dry_run: bool):
 
 @cli.command()
 @click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
-@click.option("--dry-run", is_flag=True, help="Show what would be fixed without writing.")
-def fix(vault: Path, dry_run: bool):
-    """Find and interactively fix missing backlinks."""
+@click.option("--dry-run", is_flag=True, help="Show what would be removed without writing.")
+def dedup(vault: Path, dry_run: bool):
+    """Remove redundant backlinks (links implied by the inverse in the other node)."""
+    from .model import get_links, get_task_id
     if not vault.exists():
         click.echo(f"Vault not found: {vault}")
         return
     store = load_all(vault)
-    issues = check_links(store)
+    id_to_path = {get_task_id(p): p for p in store}
+    total = 0
 
-    broken = [i for i in issues if i["kind"] == "broken_ref"]
-    missing = [i for i in issues if i["kind"] == "missing_backlink"]
-
-    if broken:
-        click.echo(f"\n{len(broken)} broken reference(s) (target file not found):")
-        for i in broken:
-            click.echo(f"  [{i['src_id']}] {i['src_desc']}  --{i['link_type']}--> {i['target_id']} (missing)")
-
-    if not missing:
-        click.echo("No missing backlinks." if not broken else "")
-        return
-
-    click.echo(f"\n{len(missing)} missing backlink(s):\n")
-    fixed = 0
-    skipped = 0
-    for i in missing:
-        msg = (
-            f"  [{i['src_id']}] {i['src_desc']}\n"
-            f"    --{i['link_type']}--> [{i['target_id']}] {i['target_desc']}\n"
-            f"  Add {i['backlink_type']} backlink to [{i['target_id']}]?"
-        )
-        if dry_run:
-            click.echo(f"  would fix: [{i['src_id']}] --{i['link_type']}--> [{i['target_id']}]")
-            fixed += 1
-            continue
-        if click.confirm(msg, default=True):
-            src_data = store[i["src_path"]]
-            link = next(
-                (l for l in src_data.get("links", [])
-                 if l.get("type") == i["link_type"]
-                 and (l.get("target_node", "") or "").upper() == i["target_id"].upper()),
-                None,
+    for path, data in store.items():
+        src_id = get_task_id(path).upper()
+        links = get_links(data)
+        to_remove = []
+        for link in links:
+            ltype = link.get("type", "")
+            target_id = (link.get("target_node") or "").upper()
+            if not target_id:
+                continue
+            lt = LINK_TYPE_MAP.get(ltype)
+            if not lt or not lt.backlink:
+                continue
+            target_path = id_to_path.get(target_id)
+            if not target_path:
+                continue
+            # Is the inverse already declared in the other node?
+            inverse_type = lt.backlink
+            has_inverse = any(
+                l.get("type") == inverse_type
+                and (l.get("target_node") or "").upper() == src_id
+                for l in get_links(store[target_path])
             )
-            if link and add_backlink(i["src_path"], src_data, link, store):
-                click.echo(f"  ✓ fixed\n")
-                fixed += 1
-            else:
-                click.echo(f"  already fixed or skipped\n")
-        else:
-            skipped += 1
-            click.echo()
+            if has_inverse:
+                to_remove.append(link)
+        if to_remove:
+            src_desc = data.get("description", path.stem)
+            label = "[dry-run] " if dry_run else ""
+            click.echo(f"{label}[{get_task_id(path)}] {src_desc}")
+            for link in to_remove:
+                click.echo(f"  remove {link.get('type')} → {link.get('target_node')}")
+            if not dry_run:
+                data["links"] = [l for l in links if l not in to_remove]
+                save_task(path, data)
+            total += len(to_remove)
 
-    if not dry_run:
-        click.echo(f"{fixed} fixed, {skipped} skipped.")
+    if total == 0:
+        click.echo("No redundant links found.")
+    elif dry_run:
+        click.echo(f"\n{total} link(s) would be removed (dry run).")
     else:
-        click.echo(f"\n{fixed} would be fixed (dry run).")
+        click.echo(f"\nRemoved {total} redundant link(s).")
 
 
 if __name__ == "__main__":
