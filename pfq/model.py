@@ -146,6 +146,93 @@ def sort_globally(store: dict[Path, dict]) -> list[tuple[Path, int]]:
     return result
 
 
+def check_links(store: dict[Path, dict]) -> list[dict]:
+    """
+    Find all missing backlinks and broken target_node references.
+    Returns a list of issue dicts with keys:
+      kind: "missing_backlink" | "broken_ref"
+      src_path, src_id, src_desc, link_type, target_id,
+      target_path (missing_backlink only), target_desc, backlink_type
+    """
+    from .config import LINK_TYPE_MAP
+    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
+    issues: list[dict] = []
+
+    for path, data in store.items():
+        src_id = get_task_id(path)
+        src_desc = str(data.get("description", src_id) or src_id)
+        for link in get_links(data):
+            ltype = link.get("type", "")
+            target_id = link.get("target_node")
+            if not target_id:
+                continue
+            target_path = id_to_path.get(target_id.upper())
+            if not target_path:
+                issues.append({
+                    "kind": "broken_ref",
+                    "src_path": path, "src_id": src_id, "src_desc": src_desc,
+                    "link_type": ltype, "target_id": target_id,
+                })
+                continue
+            lt = LINK_TYPE_MAP.get(ltype)
+            if not lt or not lt.backlink:
+                continue
+            backlink_type = lt.backlink
+            target_data = store[target_path]
+            has_backlink = any(
+                l.get("type") == backlink_type
+                and (l.get("target_node", "") or "").upper() == src_id.upper()
+                for l in get_links(target_data)
+            )
+            if not has_backlink:
+                issues.append({
+                    "kind": "missing_backlink",
+                    "src_path": path, "src_id": src_id, "src_desc": src_desc,
+                    "link_type": ltype, "target_id": target_id,
+                    "target_path": target_path,
+                    "target_desc": str(target_data.get("description", target_id) or target_id),
+                    "backlink_type": backlink_type,
+                })
+    return issues
+
+
+def add_backlink(src_path: Path, src_data: dict, link: dict, store: dict[Path, dict]) -> bool:
+    """
+    Given a link in src_data pointing to a target, add the inverse link in the target file.
+    Returns True if a backlink was added, False if it already existed or not applicable.
+    """
+    from .config import LINK_TYPE_MAP
+    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
+    ltype = link.get("type", "")
+    target_id = link.get("target_node")
+    if not target_id:
+        return False
+    lt = LINK_TYPE_MAP.get(ltype)
+    if not lt or not lt.backlink:
+        return False
+    target_path = id_to_path.get(target_id.upper())
+    if not target_path:
+        return False
+    target_data = store[target_path]
+    backlink_type = lt.backlink
+    src_id = get_task_id(src_path)
+    already = any(
+        l.get("type") == backlink_type
+        and (l.get("target_node", "") or "").upper() == src_id.upper()
+        for l in get_links(target_data)
+    )
+    if already:
+        return False
+    src_desc = str(src_data.get("description", "") or "")
+    target_data.setdefault("links", []).append({
+        "type": backlink_type,
+        "description": src_desc,
+        "target_node": src_id,
+    })
+    save_task(target_path, target_data)
+    return True
+
+
 def score_tasks(query: str, store: dict[Path, dict]) -> dict[Path, float]:
     """
     Score each task by word overlap with query.

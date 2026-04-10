@@ -24,6 +24,7 @@ from textual.widgets import (
 
 from .config import FIELDS, LINK_TYPES, LINK_TYPE_MAP, STATUSES, TYPES
 from .model import (
+    add_backlink,
     find_path_by_id,
     get_links,
     get_task_id,
@@ -1254,9 +1255,13 @@ class PfqApp(App):
         links = pane.data.setdefault("links", [])
         if link_idx >= 0 and link_idx < len(links):
             links[link_idx]["target_node"] = target_id
+            new_link = links[link_idx]
         else:
-            links.append({"type": link_type, "target_node": target_id})
+            new_link = {"type": link_type, "target_node": target_id}
+            links.append(new_link)
         save_task(pane.path, pane.data)
+        # create backlink in target file
+        add_backlink(pane.path, pane.data, new_link, self.store)
         pane.rows = build_rows(pane.data)
         pane._rebuild(keep_cursor=pane._cursor_idx)
         pane._link_pending_type = None

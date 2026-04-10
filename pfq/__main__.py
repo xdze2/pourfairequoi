@@ -2,7 +2,7 @@ import click
 from pathlib import Path
 
 from .app import PfqApp
-from .model import load_all, migrate_task, new_filepath, save_task
+from .model import add_backlink, check_links, load_all, migrate_task, new_filepath, save_task
 
 
 @click.group(invoke_without_command=True)
@@ -109,6 +109,65 @@ def clean(vault: Path, dry_run: bool):
         click.echo("Nothing to clean.")
     elif not dry_run:
         click.echo(f"\nCleaned {total} file(s).")
+
+
+@cli.command()
+@click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
+@click.option("--dry-run", is_flag=True, help="Show what would be fixed without writing.")
+def fix(vault: Path, dry_run: bool):
+    """Find and interactively fix missing backlinks."""
+    if not vault.exists():
+        click.echo(f"Vault not found: {vault}")
+        return
+    store = load_all(vault)
+    issues = check_links(store)
+
+    broken = [i for i in issues if i["kind"] == "broken_ref"]
+    missing = [i for i in issues if i["kind"] == "missing_backlink"]
+
+    if broken:
+        click.echo(f"\n{len(broken)} broken reference(s) (target file not found):")
+        for i in broken:
+            click.echo(f"  [{i['src_id']}] {i['src_desc']}  --{i['link_type']}--> {i['target_id']} (missing)")
+
+    if not missing:
+        click.echo("No missing backlinks." if not broken else "")
+        return
+
+    click.echo(f"\n{len(missing)} missing backlink(s):\n")
+    fixed = 0
+    skipped = 0
+    for i in missing:
+        msg = (
+            f"  [{i['src_id']}] {i['src_desc']}\n"
+            f"    --{i['link_type']}--> [{i['target_id']}] {i['target_desc']}\n"
+            f"  Add {i['backlink_type']} backlink to [{i['target_id']}]?"
+        )
+        if dry_run:
+            click.echo(f"  would fix: [{i['src_id']}] --{i['link_type']}--> [{i['target_id']}]")
+            fixed += 1
+            continue
+        if click.confirm(msg, default=True):
+            src_data = store[i["src_path"]]
+            link = next(
+                (l for l in src_data.get("links", [])
+                 if l.get("type") == i["link_type"]
+                 and (l.get("target_node", "") or "").upper() == i["target_id"].upper()),
+                None,
+            )
+            if link and add_backlink(i["src_path"], src_data, link, store):
+                click.echo(f"  ✓ fixed\n")
+                fixed += 1
+            else:
+                click.echo(f"  already fixed or skipped\n")
+        else:
+            skipped += 1
+            click.echo()
+
+    if not dry_run:
+        click.echo(f"{fixed} fixed, {skipped} skipped.")
+    else:
+        click.echo(f"\n{fixed} would be fixed (dry run).")
 
 
 if __name__ == "__main__":
