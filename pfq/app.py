@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional
 
 from rich.text import Text
-from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -22,14 +21,17 @@ from textual.widgets import (
     Static,
 )
 
-from .config import FIELDS, LINK_TYPES, LINK_TYPE_MAP, STATUSES, TYPES
+from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, STATUSES, TYPES
 from .model import (
     find_path_by_id,
-    get_links,
+    get_constrain,
+    get_how,
     get_task_id,
+    is_inline,
     load_all,
     load_task,
     new_filepath,
+    promote_inline,
     save_task,
     score_tasks,
     sort_globally,
@@ -101,21 +103,23 @@ class ConfirmModal(ModalScreen[bool]):
 
 @dataclass
 class Row:
-    kind: str  # "simple" | "text" | "link_header" | "link_item" | "link_add"
-               # | "backlink_header" | "backlink_item"
-    field: str  # field name for simple/text; link type name for link rows
-    idx: int | None  # index in data["links"] for link_item, else None
-    # for backlink_item: the path and description of the referring node
+    kind: str  # "simple" | "text"
+               # | "how_header" | "how_item" | "how_inline" | "how_add"
+               # | "constrain_header" | "constrain_item" | "constrain_add"
+               # | "why_header" | "why_item"
+    field: str  # field name for simple/text; constrain type for constrain rows; "" otherwise
+    idx: int | None  # index into how or constrain list; None for headers/add
     backlink_path: "Path | None" = None
     backlink_desc: str = ""
 
     @property
     def editable(self) -> bool:
-        return self.kind in ("simple", "text", "link_item")
+        return self.kind in ("simple", "text", "how_item", "how_inline", "constrain_item")
 
 
 def build_rows(data: dict) -> list[Row]:
     rows: list[Row] = []
+
     # scalar / text fields — description always first
     rows.append(Row("simple", "description", None))
     for key, ftype in FIELDS.items():
@@ -123,64 +127,59 @@ def build_rows(data: dict) -> list[Row]:
             continue
         rows.append(Row("text" if ftype == "text" else "simple", key, None))
 
-    # links — grouped by type, sorted by sort_order
-    links = get_links(data)
-    present_types = []
-    seen = set()
-    for lt in sorted(LINK_TYPES, key=lambda x: x.sort_order):
-        type_links = [(i, l) for i, l in enumerate(links) if l.get("type") == lt.name]
-        if type_links:
-            if lt.name not in seen:
-                present_types.append(lt.name)
-                seen.add(lt.name)
-            rows.append(Row("link_header", lt.name, None))
-            for i, _ in type_links:
-                rows.append(Row("link_item", lt.name, i))
-            rows.append(Row("link_add", lt.name, None))
+    # how section
+    how = get_how(data)
+    if how:
+        rows.append(Row("how_header", "", None))
+        for i, entry in enumerate(how):
+            if is_inline(entry):
+                rows.append(Row("how_inline", "", i))
+            else:
+                rows.append(Row("how_item", "", i))
+        rows.append(Row("how_add", "", None))
+
+    # constrain section — grouped by type
+    constrain = get_constrain(data)
+    if constrain:
+        for ct in CONSTRAIN_TYPES:
+            type_entries = [(i, e) for i, e in enumerate(constrain) if e.get("type") == ct.name]
+            if type_entries:
+                rows.append(Row("constrain_header", ct.name, None))
+                for i, _ in type_entries:
+                    rows.append(Row("constrain_item", ct.name, i))
+                rows.append(Row("constrain_add", ct.name, None))
+
     return rows
 
 
 def build_backlink_rows(path: "Path", store: dict) -> list[Row]:
-    """Derive backlink rows by scanning the store for nodes that link to path."""
-    from .config import LINK_TYPE_MAP
+    """Derive 'why' rows by scanning for nodes that declare path as a how child."""
     current_id = get_task_id(path).upper()
-    # group: inverse_link_type -> list of (src_path, src_desc, link_type)
-    groups: dict[str, list[tuple]] = {}
+    parents: list[tuple[Path, str]] = []
     for src_path, src_data in store.items():
         if src_path == path:
             continue
-        src_id = get_task_id(src_path).upper()
-        src_desc = str(src_data.get("description", "") or src_id)
-        for link in get_links(src_data):
-            if (link.get("target_node") or "").upper() != current_id:
-                continue
-            ltype = link.get("type", "")
-            lt = LINK_TYPE_MAP.get(ltype)
-            inverse = lt.backlink if lt else None
-            display_as = inverse or ltype  # fall back to same type if no inverse
-            groups.setdefault(display_as, []).append((src_path, src_desc, ltype))
+        for entry in get_how(src_data):
+            if (entry.get("target_node") or "").upper() == current_id:
+                desc = str(src_data.get("description", "") or get_task_id(src_path))
+                parents.append((src_path, desc))
+                break
 
-    if not groups:
+    if not parents:
         return []
 
-    rows: list[Row] = []
-    rows.append(Row("backlink_header", "", None))
-    for inverse_type, refs in sorted(groups.items()):
-        lt = LINK_TYPE_MAP.get(inverse_type)
-        label = lt.label if lt else inverse_type
-        rows.append(Row("backlink_header", label, None))
-        for src_path, src_desc, _ in refs:
-            rows.append(Row("backlink_item", inverse_type, None,
-                            backlink_path=src_path, backlink_desc=src_desc))
+    rows: list[Row] = [Row("why_header", "", None)]
+    for src_path, src_desc in parents:
+        rows.append(Row("why_item", "", None, backlink_path=src_path, backlink_desc=src_desc))
     return rows
 
 
-def _resolve_link_desc(link: dict, store: dict) -> str:
-    """Return link description, falling back to the target node's description."""
-    desc = str(link.get("description", "") or "")
+def _resolve_entry_desc(entry: dict, store: dict) -> str:
+    """Return description for a how or constrain entry, falling back to target node's description."""
+    desc = str(entry.get("description", "") or "")
     if desc:
         return desc
-    target_id = str(link.get("target_node", "") or "")
+    target_id = str(entry.get("target_node", "") or "")
     if target_id and store:
         target_path = find_path_by_id(target_id, store)
         if target_path:
@@ -191,25 +190,29 @@ def _resolve_link_desc(link: dict, store: dict) -> str:
 def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
     if row.kind in ("simple", "text"):
         return str(data.get(row.field) or "")
-    if row.kind == "link_item" and row.idx is not None:
-        links = get_links(data)
-        if row.idx < len(links):
-            link = links[row.idx]
-            desc = _resolve_link_desc(link, store or {})
-            target = str(link.get("target_node", "") or "")
-            if desc and target:
-                return f"{desc} #{target}"
-            return target and f"#{target}" or desc
+    _store = store or {}
+    if row.kind in ("how_item", "how_inline") and row.idx is not None:
+        how = get_how(data)
+        if row.idx < len(how):
+            return _resolve_entry_desc(how[row.idx], _store)
+    if row.kind == "constrain_item" and row.idx is not None:
+        constrain = get_constrain(data)
+        if row.idx < len(constrain):
+            return _resolve_entry_desc(constrain[row.idx], _store)
     return ""
 
 
 def set_row_text(row: Row, data: dict, value: str) -> None:
     if row.kind in ("simple", "text"):
         data[row.field] = value
-    elif row.kind == "link_item" and row.idx is not None:
-        links = get_links(data)
-        if row.idx < len(links):
-            links[row.idx]["description"] = value
+    elif row.kind in ("how_item", "how_inline") and row.idx is not None:
+        how = get_how(data)
+        if row.idx < len(how):
+            how[row.idx]["description"] = value
+    elif row.kind == "constrain_item" and row.idx is not None:
+        constrain = get_constrain(data)
+        if row.idx < len(constrain):
+            constrain[row.idx]["description"] = value
 
 
 # ── File nav pane ─────────────────────────────────────────────────────────────
@@ -364,9 +367,6 @@ class FileNavPane(Widget, can_focus=True):
             "status": "todo",
             "start_date": date.today().isoformat(),
         }
-        for key, ftype in FIELDS.items():
-            if ftype == "list" and key not in data:
-                data[key] = []
         save_task(path, data)
         self.notify_file_added(path, data)
         self.app._open_in_task_pane(path)  # type: ignore[attr-defined]
@@ -565,10 +565,10 @@ class TaskRowItem(ListItem):
         self.refresh_label()
 
     def _make_renderable(self) -> Text:
-        text = get_row_text(self._row, self._data)
         kind = self._row.kind
 
         if kind == "text":
+            text = get_row_text(self._row, self._data)
             t = Text(overflow="fold")
             t.append(f" ── {self._row.field} \n", style="bold cyan")
             if text:
@@ -583,32 +583,52 @@ class TaskRowItem(ListItem):
         t = Text(no_wrap=True, overflow="ellipsis")
 
         if kind == "simple":
+            text = get_row_text(self._row, self._data)
             t.append(f" {self._row.field:<14}", style="dim")
             t.append(text)
-        elif kind == "link_header":
-            lt = LINK_TYPE_MAP.get(self._row.field)
-            label = lt.label if lt else self._row.field
-            t.append(f" ── {label} ", style="bold cyan")
-        elif kind == "link_add":
+
+        elif kind == "how_header":
+            t.append(" ── how ", style="bold cyan")
+
+        elif kind == "how_add":
             t.append("    +", style="dim")
-        elif kind == "link_item":
-            links = get_links(self._data)
-            link = links[self._row.idx] if self._row.idx is not None and self._row.idx < len(links) else {}
-            desc = _resolve_link_desc(link, self._store)
-            target = str(link.get("target_node", "") or "")
+
+        elif kind in ("how_item", "how_inline"):
+            how = get_how(self._data)
+            entry = how[self._row.idx] if self._row.idx is not None and self._row.idx < len(how) else {}
+            desc = _resolve_entry_desc(entry, self._store)
+            target = str(entry.get("target_node", "") or "")
             t.append("    • ")
             if desc:
-                own_desc = str(link.get("description", "") or "")
+                own_desc = str(entry.get("description", "") or "")
                 t.append(desc, style="" if own_desc else "dim")
             if target:
                 t.append(f" #{target}", style="color(8)")
-        elif kind == "backlink_header":
-            label = self._row.field
-            if label:
-                t.append(f" ── {label} ", style="bold magenta")
-            else:
-                t.append(" ── referenced by ", style="bold magenta")
-        elif kind == "backlink_item":
+
+        elif kind == "constrain_header":
+            ct = CONSTRAIN_TYPE_MAP.get(self._row.field)
+            label = ct.label if ct else self._row.field
+            t.append(f" ── {label} ", style="bold magenta")
+
+        elif kind == "constrain_add":
+            t.append("    +", style="dim")
+
+        elif kind == "constrain_item":
+            constrain = get_constrain(self._data)
+            entry = constrain[self._row.idx] if self._row.idx is not None and self._row.idx < len(constrain) else {}
+            desc = _resolve_entry_desc(entry, self._store)
+            target = str(entry.get("target_node", "") or "")
+            t.append("    • ")
+            if desc:
+                own_desc = str(entry.get("description", "") or "")
+                t.append(desc, style="" if own_desc else "dim")
+            if target:
+                t.append(f" #{target}", style="color(8)")
+
+        elif kind == "why_header":
+            t.append(" ── why ", style="bold magenta")
+
+        elif kind == "why_item":
             t.append("    ← ", style="magenta")
             t.append(self._row.backlink_desc or "—", style="dim")
 
@@ -697,9 +717,10 @@ class TaskPane(Widget, can_focus=True):
         self._editing: bool = False
         self._edit_original: str = ""
         self._edit_is_new: bool = False
-        # pending link operation: type name + index in links list (-1 = new)
-        self._link_pending_type: str | None = None
-        self._link_pending_idx: int = -1
+        # pending link operation
+        self._link_pending_section: str | None = None   # "how" | "constrain"
+        self._link_pending_type: str | None = None      # constrain type name
+        self._link_pending_idx: int = -1                # index in list, or -1 for new
 
     def compose(self) -> ComposeResult:
         yield _TaskTitle(id="task-title")
@@ -771,16 +792,27 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row is None:
             return
-        if row.kind == "link_add":
+        if row.kind in ("how_add", "constrain_add"):
             self.action_insert()
             return
-        if row.kind == "link_item" and row.idx is not None:
-            links = get_links(self.data)
-            if row.idx < len(links):
-                target_id = links[row.idx].get("target_node")
+        if row.kind == "how_item" and row.idx is not None:
+            how = get_how(self.data)
+            if row.idx < len(how):
+                target_id = how[row.idx].get("target_node")
                 if target_id:
                     self.app.navigate_to_id(target_id)  # type: ignore[attr-defined]
-        if row.kind == "backlink_item" and row.backlink_path:
+        elif row.kind == "how_inline" and row.idx is not None and self.path:
+            # Promote inline node to file node, then navigate
+            store = self.app.store
+            new_path = promote_inline(self.path, row.idx, store)
+            self.app.query_one("#file-nav", FileNavPane).notify_file_added(  # type: ignore[attr-defined]
+                new_path, store[new_path]
+            )
+            self.data = store[self.path]
+            self.rows = build_rows(self.data)
+            self._rebuild(keep_cursor=self._cursor_idx)
+            self.app.navigate_to_id(get_task_id(new_path))  # type: ignore[attr-defined]
+        elif row.kind == "why_item" and row.backlink_path:
             self.app._open_file(row.backlink_path)  # type: ignore[attr-defined]
 
     # ── Edit ──────────────────────────────────────────────────────────────────
@@ -792,9 +824,12 @@ class TaskPane(Widget, can_focus=True):
         item = self._current_item()
         if row and row.editable and item:
             self._editing = True
-            if row.kind == "link_item" and row.idx is not None:
-                links = get_links(self.data)
-                edit_text = str(links[row.idx].get("description", "") or "") if row.idx < len(links) else ""
+            if row.kind in ("how_item", "how_inline") and row.idx is not None:
+                how = get_how(self.data)
+                edit_text = str(how[row.idx].get("description", "") or "") if row.idx < len(how) else ""
+            elif row.kind == "constrain_item" and row.idx is not None:
+                constrain = get_constrain(self.data)
+                edit_text = str(constrain[row.idx].get("description", "") or "") if row.idx < len(constrain) else ""
             else:
                 edit_text = get_row_text(row, self.data)
             self._edit_original = edit_text
@@ -810,7 +845,6 @@ class TaskPane(Widget, can_focus=True):
             if self.path:
                 save_task(self.path, self.data)
             item.end_edit()
-            # if description changed, refresh title bar
             if row.field == "description":
                 self._refresh_title()
         self._editing = False
@@ -846,44 +880,67 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row is None or not self.path:
             return
-        if row.kind not in ("link_header", "link_item", "link_add"):
-            return
-        link_type = row.field
-        links = self.data.setdefault("links", [])
-        # insert after current item, or at end of this type's group
-        if row.kind == "link_item" and row.idx is not None:
-            insert_at = row.idx + 1
-        else:
-            # after last link of this type
-            positions = [i for i, l in enumerate(links) if l.get("type") == link_type]
-            insert_at = (positions[-1] + 1) if positions else len(links)
-        links.insert(insert_at, {"type": link_type, "description": ""})
-        save_task(self.path, self.data)
-        self.rows = build_rows(self.data)
-        cursor_pos = 0
-        for i, r in enumerate(self.rows):
-            if r.kind == "link_item" and r.field == link_type and r.idx == insert_at:
-                cursor_pos = i
-                break
-        self._rebuild(keep_cursor=cursor_pos)
-        self._edit_is_new = True
-        self.action_edit()
+
+        if row.kind in ("how_header", "how_item", "how_inline", "how_add"):
+            how = self.data.setdefault("how", [])
+            if row.kind in ("how_item", "how_inline") and row.idx is not None:
+                insert_at = row.idx + 1
+            else:
+                insert_at = len(how)
+            how.insert(insert_at, {"description": ""})
+            save_task(self.path, self.data)
+            self.rows = build_rows(self.data)
+            cursor_pos = 0
+            for i, r in enumerate(self.rows):
+                if r.kind == "how_inline" and r.idx == insert_at:
+                    cursor_pos = i
+                    break
+            self._rebuild(keep_cursor=cursor_pos)
+            self._edit_is_new = True
+            self.action_edit()
+
+        elif row.kind in ("constrain_header", "constrain_item", "constrain_add"):
+            ct_name = row.field
+            constrain = self.data.setdefault("constrain", [])
+            if row.kind == "constrain_item" and row.idx is not None:
+                insert_at = row.idx + 1
+            else:
+                positions = [i for i, e in enumerate(constrain) if e.get("type") == ct_name]
+                insert_at = (positions[-1] + 1) if positions else len(constrain)
+            constrain.insert(insert_at, {"type": ct_name, "description": ""})
+            save_task(self.path, self.data)
+            self.rows = build_rows(self.data)
+            cursor_pos = 0
+            for i, r in enumerate(self.rows):
+                if r.kind == "constrain_item" and r.field == ct_name and r.idx == insert_at:
+                    cursor_pos = i
+                    break
+            self._rebuild(keep_cursor=cursor_pos)
+            self._edit_is_new = True
+            self.action_edit()
 
     def action_delete(self) -> None:
         row = self.current_row()
         if row is None or not self.path:
             return
-        if row.kind == "link_item" and row.idx is not None:
-            links = get_links(self.data)
-            if row.idx < len(links):
-                links.pop(row.idx)
-            self.data["links"] = links
+
+        if row.kind in ("how_item", "how_inline") and row.idx is not None:
+            how = get_how(self.data)
+            if row.idx < len(how):
+                how.pop(row.idx)
+            self.data["how"] = how
+        elif row.kind == "constrain_item" and row.idx is not None:
+            constrain = get_constrain(self.data)
+            if row.idx < len(constrain):
+                constrain.pop(row.idx)
+            self.data["constrain"] = constrain
         elif row.kind == "simple" and row.field != "description":
             self.data.pop(row.field, None)
         elif row.kind == "text":
             self.data.pop(row.field, None)
         else:
             return
+
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
@@ -892,18 +949,19 @@ class TaskPane(Widget, can_focus=True):
 
     def action_add_field(self) -> None:
         missing = []
-        # scalar/text fields not yet present or empty
         for key, ftype in FIELDS.items():
             if key == "description":
                 continue
             val = self.data.get(key)
             if not val or not str(val).strip():
                 missing.append(key)
-        # link types not yet used
-        present_link_types = {l.get("type") for l in get_links(self.data)}
-        for lt in LINK_TYPES:
-            if lt.name not in present_link_types:
-                missing.append(lt.name)
+        if not get_how(self.data):
+            missing.append("how")
+        constrain = get_constrain(self.data)
+        present_ct = {e.get("type") for e in constrain}
+        for ct in CONSTRAIN_TYPES:
+            if ct.name not in present_ct:
+                missing.append(ct.name)
         if missing:
             self.app.push_screen(  # type: ignore[attr-defined]
                 AddSectionModal(missing), self._on_field_chosen
@@ -912,23 +970,44 @@ class TaskPane(Widget, can_focus=True):
     def _on_field_chosen(self, field: str | None) -> None:
         if not field or not self.path:
             return
-        if field in LINK_TYPE_MAP:
-            # adding a link type section — create first empty link, open edit
-            links = self.data.setdefault("links", [])
-            insert_at = len(links)
-            links.append({"type": field, "description": ""})
+        if field == "how":
+            how = self.data.setdefault("how", [])
+            how.append({"description": ""})
+            save_task(self.path, self.data)
+            self.rows = build_rows(self.data)
+            cursor_pos = 0
+            for i, r in enumerate(self.rows):
+                if r.kind == "how_inline" and r.idx == len(how) - 1:
+                    cursor_pos = i
+                    break
+            self._rebuild(keep_cursor=cursor_pos)
+            self._edit_is_new = True
+            self.action_edit()
+        elif field in CONSTRAIN_TYPE_MAP:
+            constrain = self.data.setdefault("constrain", [])
+            constrain.append({"type": field, "description": ""})
+            save_task(self.path, self.data)
+            self.rows = build_rows(self.data)
+            cursor_pos = 0
+            for i, r in enumerate(self.rows):
+                if r.kind == "constrain_item" and r.field == field:
+                    cursor_pos = i
+                    break
+            self._rebuild(keep_cursor=cursor_pos)
+            self._edit_is_new = True
+            self.action_edit()
         else:
             self.data[field] = ""
-        save_task(self.path, self.data)
-        self.rows = build_rows(self.data)
-        cursor_pos = 0
-        for i, r in enumerate(self.rows):
-            if r.field == field and r.kind not in ("link_header",):
-                cursor_pos = i
-                break
-        self._rebuild(keep_cursor=cursor_pos)
-        self._edit_is_new = True
-        self.action_edit()
+            save_task(self.path, self.data)
+            self.rows = build_rows(self.data)
+            cursor_pos = 0
+            for i, r in enumerate(self.rows):
+                if r.field == field and r.kind in ("simple", "text"):
+                    cursor_pos = i
+                    break
+            self._rebuild(keep_cursor=cursor_pos)
+            self._edit_is_new = True
+            self.action_edit()
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
@@ -937,50 +1016,67 @@ class TaskPane(Widget, can_focus=True):
             self.app._show_file_nav()  # type: ignore[attr-defined]
 
     def action_link(self) -> None:
-        """Open link picker. If on a link row, use that type; else ask for type first."""
+        """Open link picker for the current section."""
         if self._editing or not self.path:
             return
         row = self.current_row()
-        if row and row.kind in ("link_header", "link_item", "link_add"):
-            link_type = row.field
-            pending_idx = row.idx if row.kind == "link_item" else -1
-            self.app._start_linking(link_type, pending_idx)  # type: ignore[attr-defined]
+        if row and row.kind in ("how_header", "how_item", "how_inline", "how_add"):
+            pending_idx = row.idx if row.kind in ("how_item", "how_inline") else -1
+            self.app._start_linking("how", None, pending_idx)  # type: ignore[attr-defined]
+        elif row and row.kind in ("constrain_header", "constrain_item", "constrain_add"):
+            pending_idx = row.idx if row.kind == "constrain_item" else -1
+            self.app._start_linking("constrain", row.field, pending_idx)  # type: ignore[attr-defined]
         else:
-            # ask for link type first
-            available = [lt.name for lt in LINK_TYPES]
+            available = ["how"] + [ct.name for ct in CONSTRAIN_TYPES]
             self.app.push_screen(  # type: ignore[attr-defined]
-                AddSectionModal(available, title="Link type:"),
+                AddSectionModal(available, title="Link as:"),
                 self._on_link_type_chosen,
             )
 
-    def _on_link_type_chosen(self, link_type: str | None) -> None:
-        if link_type and self.path:
-            self.app._start_linking(link_type, -1)  # type: ignore[attr-defined]
+    def _on_link_type_chosen(self, section: str | None) -> None:
+        if not section or not self.path:
+            return
+        if section == "how":
+            self.app._start_linking("how", None, -1)  # type: ignore[attr-defined]
+        elif section in CONSTRAIN_TYPE_MAP:
+            self.app._start_linking("constrain", section, -1)  # type: ignore[attr-defined]
 
     def action_unlink(self) -> None:
-        """Clear target_node from the current link_item."""
+        """Clear target_node from the current link entry."""
         if self._editing:
             return
         row = self.current_row()
-        if row is None or row.kind != "link_item" or row.idx is None or not self.path:
+        if row is None or not self.path:
             return
-        links = get_links(self.data)
-        if row.idx < len(links) and links[row.idx].get("target_node"):
-            self.app.push_screen(  # type: ignore[attr-defined]
-                ConfirmModal("Remove target from this link?"),
-                lambda ok: self._on_unlink_confirmed(ok, row.idx),
-            )
+        if row.kind == "how_item" and row.idx is not None:
+            how = get_how(self.data)
+            if row.idx < len(how) and how[row.idx].get("target_node"):
+                self.app.push_screen(  # type: ignore[attr-defined]
+                    ConfirmModal("Remove target from this link?"),
+                    lambda ok: self._on_unlink_confirmed(ok, "how", row.idx),
+                )
+        elif row.kind == "constrain_item" and row.idx is not None:
+            constrain = get_constrain(self.data)
+            if row.idx < len(constrain) and constrain[row.idx].get("target_node"):
+                self.app.push_screen(  # type: ignore[attr-defined]
+                    ConfirmModal("Remove target from this link?"),
+                    lambda ok: self._on_unlink_confirmed(ok, "constrain", row.idx),
+                )
 
-    def _on_unlink_confirmed(self, ok: bool, idx: int) -> None:
+    def _on_unlink_confirmed(self, ok: bool, section: str, idx: int) -> None:
         if not ok or not self.path:
             return
-        links = get_links(self.data)
-        if idx < len(links):
-            links[idx].pop("target_node", None)
+        if section == "how":
+            how = get_how(self.data)
+            if idx < len(how):
+                how[idx].pop("target_node", None)
+        elif section == "constrain":
+            constrain = get_constrain(self.data)
+            if idx < len(constrain):
+                constrain[idx].pop("target_node", None)
         save_task(self.path, self.data)
-        item = self._current_item()
-        if item:
-            item.refresh_label()
+        self.rows = build_rows(self.data)
+        self._rebuild(keep_cursor=self._cursor_idx)
 
 
 # ── Context pane ──────────────────────────────────────────────────────────────
@@ -1283,16 +1379,22 @@ class PfqApp(App):
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
-    def _start_linking(self, link_type: str, link_idx: int) -> None:
+    def _start_linking(self, section: str, constrain_type: str | None, link_idx: int) -> None:
         pane = self.query_one("#task-pane", TaskPane)
-        pane._link_pending_type = link_type
+        pane._link_pending_section = section
+        pane._link_pending_type = constrain_type
         pane._link_pending_idx = link_idx
-        # Score tasks by word overlap with the pending link description
+        # Score tasks by word overlap with pending link description
         query = ""
         if link_idx >= 0:
-            links = get_links(pane.data)
-            if link_idx < len(links):
-                query = str(links[link_idx].get("description", "") or "")
+            if section == "how":
+                how = get_how(pane.data)
+                if link_idx < len(how):
+                    query = str(how[link_idx].get("description", "") or "")
+            elif section == "constrain":
+                constrain = get_constrain(pane.data)
+                if link_idx < len(constrain):
+                    query = str(constrain[link_idx].get("description", "") or "")
         scores = score_tasks(query, self.store) if query else {}
         picker = self.query_one("#link-picker", LinkPickerPane)
         picker.refresh_files(scores=scores or None)
@@ -1305,22 +1407,31 @@ class PfqApp(App):
 
     def _apply_link(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
-        if not pane.path or pane._link_pending_type is None:
+        if not pane.path or pane._link_pending_section is None:
             self._cancel_link()
             return
         target_id = get_task_id(path)
-        link_type = pane._link_pending_type
+        section = pane._link_pending_section
+        constrain_type = pane._link_pending_type
         link_idx = pane._link_pending_idx
-        links = pane.data.setdefault("links", [])
-        if link_idx >= 0 and link_idx < len(links):
-            links[link_idx]["target_node"] = target_id
-            new_link = links[link_idx]
-        else:
-            new_link = {"type": link_type, "target_node": target_id}
-            links.append(new_link)
+
+        if section == "how":
+            how = pane.data.setdefault("how", [])
+            if 0 <= link_idx < len(how):
+                how[link_idx]["target_node"] = target_id
+            else:
+                how.append({"target_node": target_id})
+        elif section == "constrain":
+            constrain = pane.data.setdefault("constrain", [])
+            if 0 <= link_idx < len(constrain):
+                constrain[link_idx]["target_node"] = target_id
+            else:
+                constrain.append({"type": constrain_type, "target_node": target_id})
+
         save_task(pane.path, pane.data)
         pane.rows = build_rows(pane.data)
         pane._rebuild(keep_cursor=pane._cursor_idx)
+        pane._link_pending_section = None
         pane._link_pending_type = None
         pane._link_pending_idx = -1
         self._cancel_link()
@@ -1335,10 +1446,17 @@ class PfqApp(App):
     def _create_and_link(self) -> None:
         pane = self.query_one("#task-pane", TaskPane)
         default = ""
-        if pane._link_pending_idx >= 0:
-            links = get_links(pane.data)
-            if pane._link_pending_idx < len(links):
-                default = str(links[pane._link_pending_idx].get("description", "") or "")
+        section = pane._link_pending_section
+        link_idx = pane._link_pending_idx
+        if link_idx >= 0 and section:
+            if section == "how":
+                how = get_how(pane.data)
+                if link_idx < len(how):
+                    default = str(how[link_idx].get("description", "") or "")
+            elif section == "constrain":
+                constrain = get_constrain(pane.data)
+                if link_idx < len(constrain):
+                    default = str(constrain[link_idx].get("description", "") or "")
         self.push_screen(NewTaskModal(default), self._on_new_task_for_link)
 
     def _on_new_task_for_link(self, description: str | None) -> None:
@@ -1385,7 +1503,7 @@ class PfqApp(App):
         pane = self.query_one("#task-pane", TaskPane)
         pane.path = path
         data = self.store.get(path) or load_task(path)
-        self.store[path] = data  # ensure store holds the live dict
+        self.store[path] = data
         pane.data = data
         pane.rows = build_rows(pane.data)
         pane._refresh_title()

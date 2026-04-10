@@ -2,8 +2,7 @@ import click
 from pathlib import Path
 
 from .app import PfqApp
-from .model import load_all, migrate_task, new_filepath, save_task
-from .config import LINK_TYPE_MAP
+from .model import get_constrain, get_how, load_all, migrate_task, new_filepath, save_task
 
 
 @click.group(invoke_without_command=True)
@@ -42,15 +41,14 @@ def new(description: str):
 @click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
 @click.option("--dry-run", is_flag=True, help="Show what would be migrated without writing.")
 def migrate(vault: Path, dry_run: bool):
-    """Migrate task files from old format (why/how/... sections) to new links format."""
+    """Migrate task files from old flat links: format to how:/constrain: format."""
     if not vault.exists():
         click.echo(f"Vault not found: {vault}")
         return
     store = load_all(vault)
     count = 0
     for path, data in store.items():
-        old_fields = {"why", "how", "need", "required_by", "but", "or", "alternative_to"}
-        if not any(f in data for f in old_fields):
+        if "links" not in data:
             continue
         label = "[dry-run] " if dry_run else ""
         click.echo(f"{label}{path.name}")
@@ -70,7 +68,7 @@ def migrate(vault: Path, dry_run: bool):
 @click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
 @click.option("--dry-run", is_flag=True, help="Show what would be cleaned without writing.")
 def clean(vault: Path, dry_run: bool):
-    """Remove empty items and empty sections from all task files."""
+    """Remove empty fields and empty entries from all task files."""
     from .config import FIELDS
     from .model import load_task
     if not vault.exists():
@@ -81,23 +79,34 @@ def clean(vault: Path, dry_run: bool):
     for path in files:
         data = load_task(path)
         changes = []
-        for key, ftype in FIELDS.items():
+        # empty scalar/text fields
+        for key in list(FIELDS):
             if key not in data:
                 continue
             val = data[key]
             if val is None or str(val).strip() == "":
                 changes.append(f"  {key}: removed empty field")
                 del data[key]
-        # clean empty links
-        links = data.get("links")
-        if isinstance(links, list):
-            cleaned = [l for l in links if l.get("description") or l.get("target_node")]
-            if len(cleaned) < len(links):
-                changes.append(f"  links: removed {len(links) - len(cleaned)} empty link(s)")
-                data["links"] = cleaned
-            if not data["links"]:
-                changes.append("  links: removed empty section")
-                del data["links"]
+        # empty how entries (no description and no target_node)
+        how = get_how(data)
+        if how:
+            cleaned = [e for e in how if e.get("description") or e.get("target_node")]
+            if len(cleaned) < len(how):
+                changes.append(f"  how: removed {len(how) - len(cleaned)} empty entry/entries")
+                data["how"] = cleaned
+            if not data.get("how"):
+                changes.append("  how: removed empty section")
+                data.pop("how", None)
+        # empty constrain entries
+        constrain = get_constrain(data)
+        if constrain:
+            cleaned = [e for e in constrain if e.get("description") or e.get("target_node")]
+            if len(cleaned) < len(constrain):
+                changes.append(f"  constrain: removed {len(constrain) - len(cleaned)} empty entry/entries")
+                data["constrain"] = cleaned
+            if not data.get("constrain"):
+                changes.append("  constrain: removed empty section")
+                data.pop("constrain", None)
         if changes:
             label = "[dry-run] " if dry_run else ""
             click.echo(f"{label}{path.name}")
@@ -110,62 +119,6 @@ def clean(vault: Path, dry_run: bool):
         click.echo("Nothing to clean.")
     elif not dry_run:
         click.echo(f"\nCleaned {total} file(s).")
-
-
-@cli.command()
-@click.option("--vault", default="data", type=click.Path(path_type=Path), show_default=True)
-@click.option("--dry-run", is_flag=True, help="Show what would be removed without writing.")
-def dedup(vault: Path, dry_run: bool):
-    """Remove redundant backlinks (links implied by the inverse in the other node)."""
-    from .model import get_links, get_task_id
-    if not vault.exists():
-        click.echo(f"Vault not found: {vault}")
-        return
-    store = load_all(vault)
-    id_to_path = {get_task_id(p): p for p in store}
-    total = 0
-
-    for path, data in store.items():
-        src_id = get_task_id(path).upper()
-        links = get_links(data)
-        to_remove = []
-        for link in links:
-            ltype = link.get("type", "")
-            target_id = (link.get("target_node") or "").upper()
-            if not target_id:
-                continue
-            lt = LINK_TYPE_MAP.get(ltype)
-            if not lt or not lt.backlink:
-                continue
-            target_path = id_to_path.get(target_id)
-            if not target_path:
-                continue
-            # Is the inverse already declared in the other node?
-            inverse_type = lt.backlink
-            has_inverse = any(
-                l.get("type") == inverse_type
-                and (l.get("target_node") or "").upper() == src_id
-                for l in get_links(store[target_path])
-            )
-            if has_inverse:
-                to_remove.append(link)
-        if to_remove:
-            src_desc = data.get("description", path.stem)
-            label = "[dry-run] " if dry_run else ""
-            click.echo(f"{label}[{get_task_id(path)}] {src_desc}")
-            for link in to_remove:
-                click.echo(f"  remove {link.get('type')} → {link.get('target_node')}")
-            if not dry_run:
-                data["links"] = [l for l in links if l not in to_remove]
-                save_task(path, data)
-            total += len(to_remove)
-
-    if total == 0:
-        click.echo("No redundant links found.")
-    elif dry_run:
-        click.echo(f"\n{total} link(s) would be removed (dry run).")
-    else:
-        click.echo(f"\nRemoved {total} redundant link(s).")
 
 
 if __name__ == "__main__":

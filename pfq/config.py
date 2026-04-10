@@ -9,31 +9,28 @@ FIELDS: dict[str, str] = {
     "description": "str",
     "type":        "str",
     "status":      "str",
+    "horizon":     "str",
     "start_date":  "str",
     "due_date":    "str",
     "notes":       "text",
+    "conclusion":  "text",
 }
 
 
+# Lateral link types (stored in constrain: section)
 @dataclass
-class LinkType:
+class ConstrainType:
     name: str
-    backlink: str | None   # name of inverse link type, or None
-    direction: str         # "up" | "down" | "lateral"
-    label: str             # display label in UI
-    sort_order: int        # display order in the links section (lower = first)
+    label: str
+    sort_order: int
 
 
-LINK_TYPES: list[LinkType] = [
-    LinkType("why",            "how",            "up",      "why",           -2),
-    LinkType("how",            "why",            "down",    "how",            2),
-    LinkType("need",           "required_by",    "down",    "need",           1),
-    LinkType("required_by",    "need",           "up",      "required by",   -1),
-    LinkType("but",            None,             "lateral", "but",            0),
-    LinkType("alternative_to", "alternative_to", "lateral", "alternative to", 0),
+CONSTRAIN_TYPES: list[ConstrainType] = [
+    ConstrainType("but",            "but",            0),
+    ConstrainType("alternative_to", "alternative to", 1),
 ]
 
-LINK_TYPE_MAP: dict[str, LinkType] = {lt.name: lt for lt in LINK_TYPES}
+CONSTRAIN_TYPE_MAP: dict[str, ConstrainType] = {ct.name: ct for ct in CONSTRAIN_TYPES}
 
 
 # status → (label, rich style)
@@ -47,7 +44,20 @@ STATUSES: dict[str, tuple[str, str]] = {
 
 # type → (label, rich style)
 TYPES: dict[str, tuple[str, str]] = {
-    "goal":       ("goal",       "bold cyan"),
-    "task":       ("task",       "white"),
-    "constraint": ("constraint", "bold magenta"),
+    "goal":        ("goal",        "bold cyan"),
+    "project":     ("project",     "cyan"),
+    "task":        ("task",        "white"),
+    "event":       ("event",       "blue"),
+    "decision":    ("decision",    "bold magenta"),
+    "milestone":   ("milestone",   "bold white"),
+    "constraint":  ("constraint",  "bold magenta"),
+}
+
+# horizon → (label, rich style)
+HORIZONS: dict[str, tuple[str, str]] = {
+    "day":    ("day",    "dim"),
+    "week":   ("week",   "dim"),
+    "month":  ("month",  "white"),
+    "year":   ("year",   "cyan"),
+    "vision": ("vision", "bold cyan"),
 }
