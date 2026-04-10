@@ -221,6 +221,21 @@ STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
 TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
 
 
+def _append_chips(t: Text, data: dict) -> None:
+    """Append type / status / date chips to a Rich Text object (inline, dim style)."""
+    task_type = str(data.get("type", "") or "")
+    status = str(data.get("status", "") or "")
+    due = str(data.get("due_date", "") or "")
+    start = str(data.get("start_date", "") or "")
+    if task_type:
+        t.append(f" {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
+    if status:
+        t.append(f" {status}", style=STATUS_STYLES.get(status, "dim"))
+    date = due or start
+    if date:
+        t.append(f" {date}", style="dim")
+
+
 class _AppHeader(Static):
     DEFAULT_CSS = "_AppHeader { height: 3; }"
 
@@ -602,8 +617,13 @@ class TaskRowItem(ListItem):
             if desc:
                 own_desc = str(entry.get("description", "") or "")
                 t.append(desc, style="" if own_desc else "dim")
-            if target:
+            if kind == "how_item" and target:
+                target_path = find_path_by_id(target, self._store)
+                if target_path:
+                    _append_chips(t, self._store.get(target_path, {}))
                 t.append(f" #{target}", style="color(8)")
+            elif kind == "how_inline":
+                _append_chips(t, entry)
 
         elif kind == "constrain_header":
             ct = CONSTRAIN_TYPE_MAP.get(self._row.field)
@@ -623,14 +643,21 @@ class TaskRowItem(ListItem):
                 own_desc = str(entry.get("description", "") or "")
                 t.append(desc, style="" if own_desc else "dim")
             if target:
+                target_path = find_path_by_id(target, self._store)
+                if target_path:
+                    _append_chips(t, self._store.get(target_path, {}))
                 t.append(f" #{target}", style="color(8)")
+            else:
+                _append_chips(t, entry)
 
         elif kind == "why_header":
             t.append(" ── why ", style="bold magenta")
 
         elif kind == "why_item":
             t.append("    ← ", style="magenta")
-            t.append(self._row.backlink_desc or "—", style="dim")
+            t.append(self._row.backlink_desc or "—")
+            if self._row.backlink_path:
+                _append_chips(t, self._store.get(self._row.backlink_path, {}))
 
         if self.selected:
             t.stylize("reverse")
@@ -721,6 +748,8 @@ class TaskPane(Widget, can_focus=True):
         self._link_pending_section: str | None = None   # "how" | "constrain"
         self._link_pending_type: str | None = None      # constrain type name
         self._link_pending_idx: int = -1                # index in list, or -1 for new
+        # why rows count (set by _rebuild, used for cursor conversion)
+        self._n_why_rows: int = 0
 
     def compose(self) -> ComposeResult:
         yield _TaskTitle(id="task-title")
@@ -741,15 +770,33 @@ class TaskPane(Widget, can_focus=True):
         return self.query_one("#task-list", _TaskList)
 
     def _rebuild(self, keep_cursor: int = 0) -> None:
+        """Rebuild the displayed row list.
+
+        Display order: scalar fields → why (backlinks) → how → constrain.
+        keep_cursor is an index into self.rows (scalar + how + constrain);
+        _rebuild converts it to the all_rows index by adding the why offset.
+        """
         lv = self._lv()
         lv.clear()
         self._items = []
-        all_rows = list(self.rows)
+
+        scalar_rows = [r for r in self.rows if r.kind in ("simple", "text")]
+        section_rows = [r for r in self.rows if r.kind not in ("simple", "text")]
+
+        why_rows: list[Row] = []
         if self.path:
             try:
-                all_rows += build_backlink_rows(self.path, self.app.store)
+                why_rows = build_backlink_rows(self.path, self.app.store)
             except Exception:
                 pass
+        self._n_why_rows = len(why_rows)
+
+        # Convert keep_cursor from self.rows space to all_rows space
+        n_scalar = len(scalar_rows)
+        if keep_cursor >= n_scalar:
+            keep_cursor += self._n_why_rows
+
+        all_rows = scalar_rows + why_rows + section_rows
         self._all_rows = all_rows
         self._cursor_idx = min(keep_cursor, len(all_rows) - 1) if all_rows else 0
         for i, row in enumerate(all_rows):
@@ -943,7 +990,14 @@ class TaskPane(Widget, can_focus=True):
 
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
-        self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
+        # Convert _cursor_idx (all_rows space) back to self.rows space for _rebuild
+        cursor = self._cursor_idx
+        n_scalar = sum(1 for r in self.rows if r.kind in ("simple", "text"))
+        if cursor >= n_scalar + self._n_why_rows:
+            cursor -= self._n_why_rows
+        elif cursor > n_scalar:
+            cursor = n_scalar
+        self._rebuild(keep_cursor=max(0, min(cursor, len(self.rows) - 1)))
 
     # ── Add field ─────────────────────────────────────────────────────────────
 
