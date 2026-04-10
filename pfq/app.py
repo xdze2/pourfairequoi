@@ -135,14 +135,27 @@ def build_rows(data: dict) -> list[Row]:
     return rows
 
 
-def get_row_text(row: Row, data: dict) -> str:
+def _resolve_link_desc(link: dict, store: dict) -> str:
+    """Return link description, falling back to the target node's description."""
+    desc = str(link.get("description", "") or "")
+    if desc:
+        return desc
+    target_id = str(link.get("target_node", "") or "")
+    if target_id and store:
+        target_path = find_path_by_id(target_id, store)
+        if target_path:
+            return str(store[target_path].get("description", "") or "")
+    return ""
+
+
+def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
     if row.kind in ("simple", "text"):
         return str(data.get(row.field) or "")
     if row.kind == "link_item" and row.idx is not None:
         links = get_links(data)
         if row.idx < len(links):
             link = links[row.idx]
-            desc = str(link.get("description", "") or "")
+            desc = _resolve_link_desc(link, store or {})
             target = str(link.get("target_node", "") or "")
             if desc and target:
                 return f"{desc} #{target}"
@@ -490,10 +503,11 @@ class TaskRowItem(ListItem):
 
     selected: reactive[bool] = reactive(False)
 
-    def __init__(self, row: Row, data: dict, **kwargs) -> None:
+    def __init__(self, row: Row, data: dict, store: dict | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._row = row
         self._data = data
+        self._store = store or {}
 
     def compose(self) -> ComposeResult:
         yield Label(self._make_renderable(), id="row-label")
@@ -535,11 +549,12 @@ class TaskRowItem(ListItem):
         elif kind == "link_item":
             links = get_links(self._data)
             link = links[self._row.idx] if self._row.idx is not None and self._row.idx < len(links) else {}
-            desc = str(link.get("description", "") or "")
+            desc = _resolve_link_desc(link, self._store)
             target = str(link.get("target_node", "") or "")
             t.append("    • ")
             if desc:
-                t.append(desc)
+                own_desc = str(link.get("description", "") or "")
+                t.append(desc, style="" if own_desc else "dim")
             if target:
                 t.append(f" #{target}", style="color(8)")
 
@@ -655,7 +670,7 @@ class TaskPane(Widget, can_focus=True):
         self._items = []
         self._cursor_idx = min(keep_cursor, len(self.rows) - 1) if self.rows else 0
         for i, row in enumerate(self.rows):
-            item = TaskRowItem(row, self.data)
+            item = TaskRowItem(row, self.data, store=self.app.store)
             item.selected = i == self._cursor_idx
             self._items.append(item)
             lv.append(item)
@@ -1243,7 +1258,13 @@ class PfqApp(App):
             self.query_one("#task-pane", TaskPane).focus()
 
     def _create_and_link(self) -> None:
-        self.push_screen(NewTaskModal(), self._on_new_task_for_link)
+        pane = self.query_one("#task-pane", TaskPane)
+        default = ""
+        if pane._link_pending_idx >= 0:
+            links = get_links(pane.data)
+            if pane._link_pending_idx < len(links):
+                default = str(links[pane._link_pending_idx].get("description", "") or "")
+        self.push_screen(NewTaskModal(default), self._on_new_task_for_link)
 
     def _on_new_task_for_link(self, description: str | None) -> None:
         if not description:
