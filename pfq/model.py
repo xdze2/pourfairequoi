@@ -78,6 +78,74 @@ def find_path_by_id(task_id: str, store: dict[Path, dict]) -> Path | None:
     return None
 
 
+def sort_globally(store: dict[Path, dict]) -> list[tuple[Path, int]]:
+    """
+    Order all nodes from most abstract (top) to most concrete (bottom).
+
+    Each node declares its own `why → parent` links. We reverse these to get
+    parent→children edges, then BFS from roots (nodes with no why targets).
+
+    Roots = nodes with no `why` link pointing to a known node = top-level goals.
+    in_degree[A] = number of valid why targets A declares (number of parents).
+    Indentation formula: max(0, depth - max(0, in_degree - 1))
+    """
+    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
+
+    # why_children[B] = nodes A that declared `why → B` (A lives below B)
+    why_children: dict[Path, list[Path]] = {p: [] for p in store}
+    # in_degree[A] = number of valid why targets A has (how many parents)
+    in_degree: dict[Path, int] = {p: 0 for p in store}
+    has_parent: set[Path] = set()  # nodes with at least one valid why target
+
+    for path, data in store.items():
+        for link in get_links(data):
+            if link.get("type") != "why":
+                continue
+            target_id = link.get("target_node")
+            if not target_id:
+                continue
+            target_path = id_to_path.get(target_id.upper())
+            if target_path and target_path != path and target_path in store:
+                why_children[target_path].append(path)
+                in_degree[path] = in_degree.get(path, 0) + 1
+                has_parent.add(path)
+
+    # Roots: nodes that declare no why target — top-level goals
+    roots = sorted(p for p in store if p not in has_parent)
+
+    # Multi-source BFS from roots through why_children
+    visited: dict[Path, int] = {}  # path -> min depth
+    queue: list[tuple[Path, int]] = []
+    for p in roots:
+        visited[p] = 0
+        queue.append((p, 0))
+
+    head = 0
+    while head < len(queue):
+        current_path, current_depth = queue[head]
+        head += 1
+        for child in why_children.get(current_path, []):
+            if child not in visited:
+                visited[child] = current_depth + 1
+                queue.append((child, current_depth + 1))
+
+    result: list[tuple[Path, int]] = []
+    for path, depth in queue:
+        deg = in_degree.get(path, 0)
+        if deg == 0:
+            display_indent = 0  # root
+        else:
+            display_indent = max(1, depth - max(0, deg - 1))
+        result.append((path, display_indent))
+
+    # Append nodes not reached (cycles or disconnected)
+    for p in sorted(store):
+        if p not in visited:
+            result.append((p, 0))
+
+    return result
+
+
 def traverse_subgraph(
     start_path: Path,
     store: dict[Path, dict],

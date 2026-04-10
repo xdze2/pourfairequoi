@@ -31,6 +31,7 @@ from .model import (
     load_task,
     new_filepath,
     save_task,
+    sort_globally,
     traverse_subgraph,
 )
 
@@ -184,6 +185,7 @@ class FileNavPane(Widget, can_focus=True):
         self.vault = vault
         self.store = store
         self._files: list[Path] = []
+        self._indent: dict[Path, int] = {}
         self._searching = False
         self._query = ""
         self._scroll = 0
@@ -193,15 +195,16 @@ class FileNavPane(Widget, can_focus=True):
 
     def _apply_filter(self) -> None:
         q = self._query.lower()
-        all_files = sorted(self.store.keys())
+        sorted_nodes = sort_globally(self.store)
+        self._indent = {p: indent for p, indent in sorted_nodes}
         if q:
             self._files = [
-                p for p in all_files
+                p for p, _ in sorted_nodes
                 if q in str(self.store[p].get("description", "") or p.stem).lower()
                 or q in p.stem.lower()
             ]
         else:
-            self._files = all_files
+            self._files = [p for p, _ in sorted_nodes]
         self.cursor = max(0, min(self.cursor, len(self._files) - 1))
         self._scroll = 0
         self.refresh()
@@ -253,8 +256,10 @@ class FileNavPane(Widget, can_focus=True):
             desc = str(data.get("description", "") or path.stem)
             status = str(data.get("status", "") or "")
             task_type = str(data.get("type", "") or "")
+            indent = self._indent.get(path, 0)
             line = Text(no_wrap=True, overflow="ellipsis")
-            line.append(f" {desc}")
+            line.append("  " * indent + " ")
+            line.append(desc)
             if task_type:
                 line.append(f" {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
             if status:
