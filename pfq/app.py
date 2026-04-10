@@ -31,6 +31,7 @@ from .model import (
     load_task,
     new_filepath,
     save_task,
+    score_tasks,
     sort_globally,
     traverse_subgraph,
 )
@@ -381,16 +382,21 @@ class LinkPickerPane(Widget, can_focus=True):
         self.vault = vault
         self.store = store
         self._files: list[Path] = []
+        self._scores: dict[Path, float] = {}
         self._searching = False
         self._query = ""
         self._scroll = 0
 
-    def refresh_files(self) -> None:
+    def refresh_files(self, scores: dict[Path, float] | None = None) -> None:
+        if scores is not None:
+            self._scores = scores
+        else:
+            self._scores = {}
         self._apply_filter()
 
     def _apply_filter(self) -> None:
         q = self._query.lower()
-        all_files = sorted(self.store.keys())
+        all_files = sorted(self.store.keys(), key=lambda p: -self._scores.get(p, 0.0))
         self._files = [
             p for p in all_files
             if not q
@@ -1221,8 +1227,15 @@ class PfqApp(App):
         pane = self.query_one("#task-pane", TaskPane)
         pane._link_pending_type = link_type
         pane._link_pending_idx = link_idx
+        # Score tasks by word overlap with the pending link description
+        query = ""
+        if link_idx >= 0:
+            links = get_links(pane.data)
+            if link_idx < len(links):
+                query = str(links[link_idx].get("description", "") or "")
+        scores = score_tasks(query, self.store) if query else {}
         picker = self.query_one("#link-picker", LinkPickerPane)
-        picker.refresh_files()
+        picker.refresh_files(scores=scores or None)
         picker.cursor = 0
         picker._searching = False
         picker._query = ""

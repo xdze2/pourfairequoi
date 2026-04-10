@@ -146,6 +146,33 @@ def sort_globally(store: dict[Path, dict]) -> list[tuple[Path, int]]:
     return result
 
 
+def score_tasks(query: str, store: dict[Path, dict]) -> dict[Path, float]:
+    """
+    Score each task by word overlap with query.
+    Returns a dict of path -> score (0.0 to 1.0), higher = more relevant.
+    Ignores common stop words. Tasks with score 0 are still included.
+    """
+    _STOP = {"a", "an", "the", "to", "of", "and", "or", "in", "for", "is", "it"}
+
+    def tokenize(text: str) -> set[str]:
+        words = re.sub(r"[^\w]+", " ", text.lower()).split()
+        return {w for w in words if w not in _STOP and len(w) > 1}
+
+    query_words = tokenize(query)
+    if not query_words:
+        return {p: 0.0 for p in store}
+
+    scores: dict[Path, float] = {}
+    for path, data in store.items():
+        desc = str(data.get("description", "") or "")
+        task_words = tokenize(desc)
+        overlap = len(query_words & task_words)
+        # Jaccard-like: overlap / union, avoids bias toward long descriptions
+        union = len(query_words | task_words)
+        scores[path] = overlap / union if union else 0.0
+    return scores
+
+
 def traverse_subgraph(
     start_path: Path,
     store: dict[Path, dict],
