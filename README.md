@@ -52,71 +52,81 @@ A node can carry:
 
 Time scope correlates naturally with DAG depth: roots tend toward long horizons, leaves toward short ones.
 
-### Fields
+### File nodes vs. in-file nodes
+
+A node can be stored in two ways:
+
+**File node** — its own YAML file. Use when the node needs its own sub-structure or may be referenced by multiple parents.
+
+**In-file node** — declared inline inside a parent's `how` list. Use for simple steps, events, or milestones that don't need further decomposition. Promote to a file node when complexity grows.
+
+### Format
 
 ```yaml
 description: Build a vintage radio       # short title, used in list view
 type: project                            # see node types above
-status: done                             # see statuses above
+status: active                           # see statuses above
 start_date: '2026-03-01'
-due_date: '2026-06-01'
 horizon: month                           # optional broad scope
 notes: |                                 # working notes, free-form
   Started after watching a restoration video.
 conclusion: |                            # for decision nodes: what was decided and why
   Chose to buy a pre-assembled kit — sourcing original capacitors was too slow.
-links:
-- type: why
-  description: Have fun
-  target_node: KRJPOL
+
+how:
+- target_node: KLOP45                    # link to a child file node
+- target_node: OAAP11
+- type: event                            # in-file node — no separate file needed
+  description: Bought the case (12€, leboncoin)
+  start_date: '2026-03-14'
+  status: done
+- type: milestone
+  description: First working prototype
+  status: todo
+
+constrain:
+- target_node: MELP6O                    # link to a constraint file node
 - type: but
-  description: budget <300 euros
-  target_node: MELP6O
-- type: or
+  description: budget <300 euros         # in-file annotation
+- type: alternative_to
   description: Start with a simpler build (alarm clock)
+- type: required_for
+  description: Do A before B
 ```
 
-### Linking
+### Link directions
 
-Links are stored in a unified `links` list. Each entry has:
-- `type` — the link kind (see below)
-- `description` — free-form text label
-- `target_node` — optional 6-character ID of another node
+**`how` — stored in the parent, points to children.**
+A parent declares what it is made of. Natural direction: a project lists its tasks, like a regular todo list.
 
-A link without `target_node` is a plain annotation.
+**`why` — derived at query time** by reversing `how` links across the store.
+"What does this node serve?" is answered by scanning which parents declared it as a child. Never stored — no duplication, no inconsistency.
 
-### Link types
+### Lateral links (`constrain` section)
 
-**Vertical — hierarchy:**
 | Type | Meaning |
 |---|---|
-| `why` | Points to a parent motivation or goal (declared by the child) |
-| `how` | Sub-task or implementation — derived by reversing `why` in the store, never stored as a backlink |
+| `but` | A blocker that must be resolved |
+| `alternative_to` / `or` | An alternative route or option |
+| `required_for` / `need` | Ordering dependency — do this first |
 
-**Lateral — reasoning:**
-| Type | Meaning |
-|---|---|
-| `but` | A blocker or constraint that must be resolved |
-| `or` / `alternative_to` | An alternative route or option |
-| `need` / `required_by` | Strict ordering dependency |
+Can point to file nodes (`target_node`) or be plain in-file annotations.
 
-The `how` relationship covers different subpart situations naturally through node type:
-- **Parts** — parallel sub-components (use `task` or `project` nodes)
-- **Steps** — sequential actions (use `task` or `action` nodes)
-- **Reflection / alternatives** — use `decision` nodes with `or` links
+### How sub-types via node type
 
-No sub-type field needed — the node type already carries this meaning.
+The `how` relationship covers different situations — the child node's `type` carries the distinction:
+- **Parts** — parallel sub-components (`task` or `project` nodes)
+- **Steps** — sequential actions (`task` or `event` nodes)
+- **Decisions** — `decision` nodes with `alternative_to` links
 
-### Backlinks
-
-Backlinks are **derived at query time** by scanning the store — they are never stored in data files. Each node only declares its own outgoing `why` links. The model layer computes inverse relationships from the full store.
+No sub-type field on the link itself needed.
 
 
 ## Architecture
 
 ### Files
 
-Each node is a YAML file in the `data/` directory.
+Each **file node** is a YAML file in the `data/` directory. **In-file nodes** live inline inside a parent's `how` or `constrain` list and have no file of their own.
 
 **Filename format:** `AB12CD_readable_slug.yaml` — a 6-character random ID followed by a slug of the description.
 
