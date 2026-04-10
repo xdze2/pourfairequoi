@@ -1,164 +1,181 @@
 # PourFaireQuoi (pfq)
 
-PourFaireQuoi is yet another todo list app, but while most task managers focus on *what* and *when*, this app focuses on *how*, *why*, *but*, *or*, and other reasoning dimensions. It allows you to build a reasoning engine for complex projects, tracking decisions, alternatives, and history.
+PourFaireQuoi is a hierarchical reasoning tool — not just a todo list. Most task managers focus on *what* and *when*. pfq focuses on *why*, *how*, *but*, and *or*: the reasoning structure behind decisions and plans.
 
-The goal is a minimal, simple app for prototyping and personal use.
+The goal is a minimal, simple app for personal use.
 The app name is pourfairequoi, abbreviated to "pfq".
 
 
 ## Goals
 
-- Brainstorm ideas
-- Plan projects
-- Brain dump / mind mapping
-- Identify real motivations and alternative routes
-- Keep a decision log
-- Identify project blockers
-  - Why is it stuck?
-  - Break it down into smaller steps
+- Brain dump ideas without friction, then clarify them
+- Break down projects into smaller steps
+- Identify what is stuck and why
+- Keep a decision log with conclusions
+- Get a global view without getting lost in detail
 
-It is more a personal tool than a professional/enterprise task manager.
 Key design principles:
 - Local files for privacy
-- Simplicity: terminal-based
-- One YAML file per task — git-friendly (readable diffs, version history, branching)
+- Terminal-based, minimal UI
+- One YAML file per node — git-friendly (readable diffs, version history)
+- No required fields — capture first, refine later
 
-Could eventually be paired with AI, but:
-- Should work without AI
-- Prefer local AI (e.g. Ollama)
 
 ## Data model
 
-### Node types
-- goal — aspirational, no clear end condition ("be healthier")
-- task — concrete, completable ("buy running shoes")
-- constraint — a fact that shapes decisions, not something you do ("budget < 300€")
+### What a node encodes
 
+A node is a single unit of thought. It can represent any of:
+- a **goal** — long-horizon aspiration, no clear end condition
+- a **project** — bounded effort with a deliverable
+- a **task** — concrete, completable action
+- an **event** — something that happened (past-dated, status done)
+- a **question / decision** — a node whose output is a conclusion, not an artifact
+- a **milestone** — a marker in time, signals progress
+- a **constraint** — a fact that shapes decisions, not something you do
+
+All are the same data structure. The difference is semantic, carried by `type` and context.
+
+### Node types
+
+`goal | project | task | event | decision | milestone | constraint`
 
 ### Node status
 
-statuses as pure lifecycle
+`todo | active | stuck | done | discarded`
 
-- todo, active, stuck, done, discarded
+### Time
+
+A node can carry:
+- `start_date`, `due_date` — actual dates
+- `horizon` — broad time scope: `day | week | month | year | vision`
+
+Time scope correlates naturally with DAG depth: roots tend toward long horizons, leaves toward short ones.
+
+### Fields
+
+```yaml
+description: Build a vintage radio       # short title, used in list view
+type: project                            # see node types above
+status: done                             # see statuses above
+start_date: '2026-03-01'
+due_date: '2026-06-01'
+horizon: month                           # optional broad scope
+notes: |                                 # working notes, free-form
+  Started after watching a restoration video.
+conclusion: |                            # for decision nodes: what was decided and why
+  Chose to buy a pre-assembled kit — sourcing original capacitors was too slow.
+links:
+- type: why
+  description: Have fun
+  target_node: KRJPOL
+- type: but
+  description: budget <300 euros
+  target_node: MELP6O
+- type: or
+  description: Start with a simpler build (alarm clock)
+```
+
+### Linking
+
+Links are stored in a unified `links` list. Each entry has:
+- `type` — the link kind (see below)
+- `description` — free-form text label
+- `target_node` — optional 6-character ID of another node
+
+A link without `target_node` is a plain annotation.
+
+### Link types
+
+**Vertical — hierarchy:**
+| Type | Meaning |
+|---|---|
+| `why` | Points to a parent motivation or goal (declared by the child) |
+| `how` | Sub-task or implementation — derived by reversing `why` in the store, never stored as a backlink |
+
+**Lateral — reasoning:**
+| Type | Meaning |
+|---|---|
+| `but` | A blocker or constraint that must be resolved |
+| `or` / `alternative_to` | An alternative route or option |
+| `need` / `required_by` | Strict ordering dependency |
+
+The `how` relationship covers different subpart situations naturally through node type:
+- **Parts** — parallel sub-components (use `task` or `project` nodes)
+- **Steps** — sequential actions (use `task` or `action` nodes)
+- **Reflection / alternatives** — use `decision` nodes with `or` links
+
+No sub-type field needed — the node type already carries this meaning.
+
+### Backlinks
+
+Backlinks are **derived at query time** by scanning the store — they are never stored in data files. Each node only declares its own outgoing `why` links. The model layer computes inverse relationships from the full store.
 
 
 ## Architecture
 
 ### Files
 
-Each task (or project) is a YAML file stored in the `data/` directory.
+Each node is a YAML file in the `data/` directory.
 
-**Filename format:** `AB12CD_readable_slug.yaml` — a random 6-character ID followed by a human-readable slug of the description.
-
-Example: `data/M11AB_vintage_radio_build.yaml`
-
-```yaml
-description: Build a vintage radio   # short title, used in list view
-type: goal                            # goal | task | constraint
-status: stuck                         # todo | active | stuck | done | discarded
-start_date: '2026-03-01'
-due_date: '2026-06-01'               # deadline or scheduled date (optional)
-notes: |                              # free-form multiline text
-  Started this after watching a restoration video.
-  Main challenge is sourcing the original capacitors.
-links:
-- type: why
-  description: fun
-- type: why
-  description: learn stuff
-- type: how
-  description: get elec gear
-- type: how
-  description: build the new electronics
-  target_node: R4DIO1               # optional: 6-char ID of the linked node
-- type: but
-  description: budget <300 euros
-- type: or
-  description: Start a less complex build (alarm clock)
-```
-
-### Linking
-
-Links are stored in a unified `links` list. Each entry has:
-- `type` — the link kind: `why`, `how`, `but`, `or`, etc.
-- `description` — free-form text label
-- `target_node` — (optional) the 6-character ID of another node in `data/`
-
-A link without `target_node` is a plain annotation (no file reference).
-
-### Backlinks
-
-Some link types have a defined inverse. When a link is created or removed via the TUI, the corresponding backlink in the target file is automatically maintained:
-
-| Type | Inverse |
-|---|---|
-| `how` | `why` |
-| `why` | `how` |
-| `need` | `required_by` |
-| `required_by` | `need` |
-
-`but` and `or` are one-directional (no inverse).
+**Filename format:** `AB12CD_readable_slug.yaml` — a 6-character random ID followed by a slug of the description.
 
 ### Config
 
-Fields and valid statuses are defined in `config.py`. This allows customising the schema without touching the app code.
+Fields and valid statuses are defined in `config.py`.
+
 
 ## UI
 
-Terminal-based (Unix), three-column layout.
+Terminal-based, three-column layout. All files are loaded into memory at startup.
 
-All files are loaded into memory at startup for fast search and graph traversal.
+**Left column — file list:**
+- Browse and search all nodes, sorted by hierarchy (roots first, children indented)
+- Shows description, type, status
 
-**Left column (1fr):**
-- **App header** — app title
-- **File list** — browse and search all tasks, showing description, type and status
+**Middle column — task view / link picker:**
+- Task view: parsed view of the open node, one line selected at a time
+- Link picker: file list for creating a link (activated with `l`), pre-sorted by relevance to the current link description
 
-**Middle column (2fr)** — switches between:
-- **Task view** — parsed view of the open task, one line selected at a time
-- **Link picker** — file list for creating a link (activated with `l`)
+**Right column — context pane (read-only, auto-updated):**
+- Why subgraph: all ancestors reachable via `why` links (BFS, flattened)
+- Current node anchor
+- How subgraph: all descendants that declare `why → current` (BFS, flattened)
+- Statistics: node counts by status
 
-**Right column (1fr) — context pane (read-only, auto-updated):**
-- **Why subgraph** — all nodes reachable upward via `why` links (BFS, flattened)
-- **Current node** — description, type, status
-- **How subgraph** — all nodes reachable downward via `how` links (BFS, flattened)
-- **Statistics** — node counts by status across both subgraphs
-
-Indentation in the subgraphs reflects depth from the current node, reduced for nodes cited multiple times (shared sub-goals or shared steps). A `×N` marker indicates a node referenced by N parents in the subgraph.
-
-**Bottom bar:** key bindings reference (Textual footer).
+Indentation reflects depth, reduced for nodes cited multiple times. `×N` marks shared nodes.
 
 ### Keyboard shortcuts
 
 #### File list
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Navigate files |
-| `Enter` | Open file in task view |
-| `n` | Create new task (prompts for description) |
-| `d` | Delete task (with confirmation) |
-| `/` | Search / filter by description |
+| `↑` / `↓` | Navigate |
+| `Enter` | Open node |
+| `n` | New node |
+| `d` | Delete node |
+| `/` | Search / filter |
 | `Esc` | Clear search |
 
 #### Task view
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Navigate lines |
-| `e` | Enter edit mode |
-| `Enter` | Confirm edit and save |
-| `Esc` | Cancel edit — or return to file list |
-| `n` | Insert new line below |
+| `e` | Edit current line |
+| `Enter` | Confirm edit / follow link |
+| `Esc` | Cancel edit — or back to file list |
+| `n` | Insert new link below |
 | `d` | Delete selected line |
-| `a` | Add a missing section |
+| `a` | Add a missing field or link section |
 | `l` | Create a link on the selected line |
-| `u` | Remove the link on the selected line (with confirmation) |
-| `Enter` | Follow link — open linked file |
-| `b` | Go back (link navigation history) |
+| `u` | Remove link target (with confirmation) |
+| `b` | Go back (navigation history) |
 
-#### Link picker (right panel)
+#### Link picker
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Navigate files |
-| `Enter` | Link selected file (auto-creates backlink) |
+| `↑` / `↓` | Navigate |
+| `Enter` | Link selected node |
 | `Esc` | Cancel |
 | `/` | Search / filter |
 
@@ -166,12 +183,13 @@ Indentation in the subgraphs reflects depth from the current node, reduced for n
 
 ```bash
 pfq                                          # open the TUI
-pfq new "my project"                         # create a new task and open it
+pfq new "my project"                         # create a new node and open it
 pfq open data/M11AB_vintage_radio_build.yaml # open a specific file
-pfq check                                    # report missing or broken backlinks
-pfq fix                                      # auto-fix missing backlinks
-pfq fix --dry-run                            # preview fixes without writing
+pfq migrate                                  # migrate old format to links format
+pfq clean                                    # remove empty fields and links
+pfq dedup                                    # remove redundant backlinks from data files
 ```
+
 
 ## Tech
 
@@ -184,35 +202,39 @@ Built with Python:
 
 ```bash
 pip install -e .
-pfq new "my first task"
+pfq new "my first goal"
 ```
 
 ## Roadmap
 
 ### v0.1 — done
 - Single file view with arrow navigation
-- Edit mode (`e` / `Enter` / `Esc`), insert (`n`), delete (`d`)
-- Auto-save on confirm, cancel restores original
-- Right panel: preview of linked file
+- Edit mode, insert, delete, auto-save
 - Add missing section (`a`)
 
 ### v0.2 — done
-- Two-column layout (file list ↔ task view, preview ↔ link picker)
-- File list with search (`/`), create (`n`), delete (`d`)
-- Link creation (`l`) and removal (`u`) with automatic backlink management
-- `pfq check` / `pfq fix` for backlink consistency
+- Two-column layout: file list ↔ task view / link picker
+- Link creation and removal
+- File search, create, delete
 
-### v0.3 — in progress
-- New data model: `type` (goal / task / constraint), `due_date`, `notes`
-- Preload all files into memory at startup for fast search and graph traversal
-- Three-column layout: file list | task view / link picker | context pane
-- Context pane: local why/how subgraph with BFS traversal, indentation by depth, statistics
+### v0.3 — done
+- Unified `links` data model (no stored backlinks — derived at query time)
+- All files preloaded at startup
+- Three-column layout: file list | task view | context pane
+- Context pane: why/how subgraphs with BFS traversal and statistics
+- File list sorted by hierarchy (topological order, indented)
+- Link picker pre-sorted by word-overlap relevance
+- Backlinks shown in task view (derived, read-only)
 
 ### Later
-- Show type and due date in file list
+- `horizon` field and timeline view (past month, past year)
+- `conclusion` field for decision nodes
+- `events` — append-only history log with user-declared dates (bi-temporal)
+- Computed stuck propagation — derive stuck status from structure
+- Next actions view — leaf nodes, no blockers, status todo
+- Node health indicator in file list
 - Full-text search across `notes`
 - AI integration (local, via Ollama)
-- Custom fields via config.py
 
 ## Credits
 
