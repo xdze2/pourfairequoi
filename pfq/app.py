@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -232,8 +233,43 @@ def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
     return ""
 
 
+_DATE_FIELDS = {"start_date", "due_date"}
+
+_RELATIVE_RE = re.compile(
+    r"^(?P<n>\d+)\s*(?P<unit>[dwmy])\s*(?P<ago>ago)?$",
+    re.IGNORECASE,
+)
+_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
+
+
+def _parse_date_input(value: str) -> str:
+    """Parse loose date input and return an ISO-8601 string, or the original value."""
+    v = value.strip()
+    if not v:
+        return v
+    # Already ISO
+    try:
+        date.fromisoformat(v)
+        return v
+    except ValueError:
+        pass
+    # Relative: e.g. "3d", "2w ago", "1m", "6m ago", "1y"
+    m = _RELATIVE_RE.match(v)
+    if m:
+        n = int(m.group("n"))
+        unit = m.group("unit").lower()
+        ago = bool(m.group("ago"))
+        delta = timedelta(days=n * _UNIT_DAYS[unit])
+        result = date.today() + (-delta if ago else delta)
+        return result.isoformat()
+    # Unrecognised — store as-is so the user sees their typo
+    return v
+
+
 def set_row_text(row: Row, data: dict, value: str) -> None:
     if row.kind in ("simple", "text"):
+        if row.field in _DATE_FIELDS:
+            value = _parse_date_input(value)
         data[row.field] = value
     elif row.kind == "how_item" and row.idx is not None:
         how = get_how(data)
