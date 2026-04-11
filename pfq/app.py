@@ -1388,8 +1388,7 @@ class TaskPane(Widget, can_focus=True):
         item = self._current_item()
         if row and item:
             set_row_text(row, self.data, event.value)
-            if self.path:
-                self.app.store.save(self.path, self.data)
+            self._save()
             item.end_edit()
             if row.field == "description":
                 self._refresh_title()
@@ -1434,7 +1433,7 @@ class TaskPane(Widget, can_focus=True):
             else:
                 insert_at = len(how)
             how.insert(insert_at, {"description": ""})
-            self.app.store.save(self.path, self.data)
+            self._save()
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1456,7 +1455,7 @@ class TaskPane(Widget, can_focus=True):
                 ]
                 insert_at = (positions[-1] + 1) if positions else len(constrain)
             constrain.insert(insert_at, {"type": ct_name, "description": ""})
-            self.app.store.save(self.path, self.data)
+            self._save()
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1493,7 +1492,7 @@ class TaskPane(Widget, can_focus=True):
         else:
             return
 
-        self.app.store.save(self.path, self.data)
+        self._save()
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
 
@@ -1525,7 +1524,7 @@ class TaskPane(Widget, can_focus=True):
         if field == "how":
             how = self.data.setdefault("how", [])
             how.append({"description": ""})
-            self.app.store.save(self.path, self.data)
+            self._save()
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1538,7 +1537,7 @@ class TaskPane(Widget, can_focus=True):
         elif field in CONSTRAIN_TYPE_MAP:
             constrain = self.data.setdefault("constrain", [])
             constrain.append({"type": field, "description": ""})
-            self.app.store.save(self.path, self.data)
+            self._save()
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1550,7 +1549,7 @@ class TaskPane(Widget, can_focus=True):
             self.action_edit()
         else:
             self.data[field] = ""
-            self.app.store.save(self.path, self.data)
+            self._save()
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1635,11 +1634,17 @@ class TaskPane(Widget, can_focus=True):
             constrain = get_constrain(self.data)
             if idx < len(constrain):
                 constrain[idx].pop("target_node", None)
-        self.app.store.save(self.path, self.data)
+        self._save()
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=self._cursor_idx)
 
     # ── Public API for App ────────────────────────────────────────────────────
+
+    def _save(self) -> None:
+        """Persist current data and notify the subgraph to recompute."""
+        if self.path:
+            self.app.store.save(self.path, self.data)
+            self.app._refresh_subgraph()  # type: ignore[attr-defined]
 
     def load(self, path: Path, data: dict) -> None:
         """Load a node into the pane and refresh display."""
@@ -1964,6 +1969,18 @@ class PfqApp(App):
         pane.rebuild_in_place()
         pane.clear_link_pending()
         self._cancel_link()
+        self._refresh_subgraph()
+
+    def _refresh_subgraph(self) -> None:
+        """Re-centre the subgraph on the current node after a data change."""
+        try:
+            left = self.query_one("#left-switcher", ContentSwitcher)
+            if left.current == "subgraph":
+                pane = self.query_one("#task-pane", TaskPane)
+                if pane.path:
+                    self.query_one("#subgraph", SubgraphPane).center_on(pane.path)
+        except Exception:
+            pass
 
     def _cancel_link(self) -> None:
         self._reverse_link = False
