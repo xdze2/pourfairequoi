@@ -7,13 +7,13 @@ from dataclasses import dataclass
 # "text" = multiline free-form text
 FIELDS: dict[str, str] = {
     "description": "str",
-    "type":        "str",
-    "status":      "str",
-    "horizon":     "str",
-    "start_date":  "str",
-    "due_date":    "str",
-    "notes":       "text",
-    "conclusion":  "text",
+    "type": "str",
+    "status": "str",
+    "horizon": "str",
+    "start_date": "str",
+    "due_date": "str",
+    "notes": "text",
+    "conclusion": "text",
 }
 
 
@@ -26,7 +26,7 @@ class ConstrainType:
 
 
 CONSTRAIN_TYPES: list[ConstrainType] = [
-    ConstrainType("but",            "but",            0),
+    ConstrainType("but", "but", 0),
     ConstrainType("alternative_to", "alternative to", 1),
 ]
 
@@ -35,29 +35,29 @@ CONSTRAIN_TYPE_MAP: dict[str, ConstrainType] = {ct.name: ct for ct in CONSTRAIN_
 
 # status → (label, rich style)
 STATUSES: dict[str, tuple[str, str]] = {
-    "todo":      ("todo",      "dim"),
-    "active":    ("active",    "bold green"),
-    "stuck":     ("stuck",     "bold yellow"),
-    "done":      ("done",      "green"),
+    "todo": ("todo", "dim yellow"),
+    "active": ("active", "bold green"),
+    "stuck": ("stuck", "bold yellow"),
+    "done": ("done", "green"),
     "discarded": ("discarded", "dim red"),
 }
 
 # type → (label, rich style)
 TYPES: dict[str, tuple[str, str]] = {
-    "goal":        ("goal",        "bold cyan"),
-    "project":     ("project",     "cyan"),
-    "task":        ("task",        "white"),
-    "event":       ("event",       "blue"),
-    "decision":    ("decision",    "bold magenta"),
-    "milestone":   ("milestone",   "bold white"),
-    "constraint":  ("constraint",  "bold magenta"),
+    "goal": ("goal", "bold cyan"),
+    "project": ("project", "cyan"),
+    "task": ("task", "white"),
+    "event": ("event", "blue"),
+    "decision": ("decision", "bold magenta"),
+    "milestone": ("milestone", "bold white"),
+    "constraint": ("constraint", "bold magenta"),
 }
 
 # horizon → (label, rich style)
 HORIZONS: dict[str, tuple[str, str]] = {
-    "day":    ("day",    "dim"),
-    "week":   ("week",   "dim"),
-    "month":  ("month",  "white"),
-    "year":   ("year",   "cyan"),
+    "day": ("day", "dim"),
+    "week": ("week", "dim"),
+    "month": ("month", "white"),
+    "year": ("year", "cyan"),
     "vision": ("vision", "bold cyan"),
 }

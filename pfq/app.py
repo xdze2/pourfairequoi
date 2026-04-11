@@ -103,10 +103,10 @@ class ConfirmModal(ModalScreen[bool]):
 
 @dataclass
 class Row:
-    kind: str  # "simple" | "text"
-               # | "how_header" | "how_item" | "how_inline" | "how_add"
-               # | "constrain_header" | "constrain_item" | "constrain_add"
-               # | "why_header" | "why_item"
+    kind: str  # "simple" | "text" | "spacer"
+    # | "how_header" | "how_item" | "how_inline" | "how_add"
+    # | "constrain_header" | "constrain_item" | "constrain_add"
+    # | "why_header" | "why_item"
     field: str  # field name for simple/text; constrain type for constrain rows; "" otherwise
     idx: int | None  # index into how or constrain list; None for headers/add
     backlink_path: "Path | None" = None
@@ -114,7 +114,13 @@ class Row:
 
     @property
     def editable(self) -> bool:
-        return self.kind in ("simple", "text", "how_item", "how_inline", "constrain_item")
+        return self.kind in (
+            "simple",
+            "text",
+            "how_item",
+            "how_inline",
+            "constrain_item",
+        )
 
 
 def build_rows(data: dict) -> list[Row]:
@@ -142,7 +148,9 @@ def build_rows(data: dict) -> list[Row]:
     constrain = get_constrain(data)
     if constrain:
         for ct in CONSTRAIN_TYPES:
-            type_entries = [(i, e) for i, e in enumerate(constrain) if e.get("type") == ct.name]
+            type_entries = [
+                (i, e) for i, e in enumerate(constrain) if e.get("type") == ct.name
+            ]
             if type_entries:
                 rows.append(Row("constrain_header", ct.name, None))
                 for i, _ in type_entries:
@@ -170,7 +178,9 @@ def build_backlink_rows(path: "Path", store: dict) -> list[Row]:
 
     rows: list[Row] = [Row("why_header", "", None)]
     for src_path, src_desc in parents:
-        rows.append(Row("why_item", "", None, backlink_path=src_path, backlink_desc=src_desc))
+        rows.append(
+            Row("why_item", "", None, backlink_path=src_path, backlink_desc=src_desc)
+        )
     return rows
 
 
@@ -215,15 +225,18 @@ def set_row_text(row: Row, data: dict, value: str) -> None:
             constrain[row.idx]["description"] = value
 
 
+_SPACER = Row("spacer", "", None)
+
+
 # ── File nav pane ─────────────────────────────────────────────────────────────
 
 STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
 TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
 
 # Fixed column widths for chip alignment (derived from config so they stay in sync)
-_TYPE_COL = max(len(k) for k in TYPES)      # "constraint" = 10
+_TYPE_COL = max(len(k) for k in TYPES)  # "constraint" = 10
 _STATUS_COL = max(len(k) for k in STATUSES)  # "discarded"  = 9
-_DATE_COL = 10                               # ISO-8601 date: yyyy-mm-dd
+_DATE_COL = 10  # ISO-8601 date: yyyy-mm-dd
 
 
 def _pad(t: Text, text: str, width: int) -> None:
@@ -292,7 +305,8 @@ class FileNavPane(Widget, can_focus=True):
         self._indent = {p: indent for p, indent in sorted_nodes}
         if q:
             self._files = [
-                p for p, _ in sorted_nodes
+                p
+                for p, _ in sorted_nodes
                 if q in str(self.store[p].get("description", "") or p.stem).lower()
                 or q in p.stem.lower()
             ]
@@ -474,7 +488,8 @@ class LinkPickerPane(Widget, can_focus=True):
         q = self._query.lower()
         all_files = sorted(self.store.keys(), key=lambda p: -self._scores.get(p, 0.0))
         self._files = [
-            p for p in all_files
+            p
+            for p in all_files
             if not q
             or q in str(self.store[p].get("description", "") or p.stem).lower()
             or q in p.stem.lower()
@@ -585,8 +600,14 @@ class TaskRowItem(ListItem):
 
     selected: reactive[bool] = reactive(False)
 
-    def __init__(self, row: Row, data: dict, store: dict | None = None,
-                 link_desc_width: int = 0, **kwargs) -> None:
+    def __init__(
+        self,
+        row: Row,
+        data: dict,
+        store: dict | None = None,
+        link_desc_width: int = 0,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._row = row
         self._data = data
@@ -605,6 +626,9 @@ class TaskRowItem(ListItem):
 
     def _make_renderable(self) -> Text:
         kind = self._row.kind
+
+        if kind == "spacer":
+            return Text("")
 
         if kind == "text":
             text = get_row_text(self._row, self._data)
@@ -634,7 +658,11 @@ class TaskRowItem(ListItem):
 
         elif kind in ("how_item", "how_inline"):
             how = get_how(self._data)
-            entry = how[self._row.idx] if self._row.idx is not None and self._row.idx < len(how) else {}
+            entry = (
+                how[self._row.idx]
+                if self._row.idx is not None and self._row.idx < len(how)
+                else {}
+            )
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
             own_desc = str(entry.get("description", "") or "")
@@ -659,7 +687,11 @@ class TaskRowItem(ListItem):
 
         elif kind == "constrain_item":
             constrain = get_constrain(self._data)
-            entry = constrain[self._row.idx] if self._row.idx is not None and self._row.idx < len(constrain) else {}
+            entry = (
+                constrain[self._row.idx]
+                if self._row.idx is not None and self._row.idx < len(constrain)
+                else {}
+            )
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
             own_desc = str(entry.get("description", "") or "")
@@ -725,7 +757,7 @@ class TaskRowItem(ListItem):
 class _TaskTitle(Static):
     """Context bar: type + status."""
 
-    DEFAULT_CSS = "_TaskTitle { height: 1; }"
+    DEFAULT_CSS = "_TaskTitle { height: 2; }"
 
     def update_task(self, data: dict) -> None:
         task_type = str(data.get("type", "") or "")
@@ -771,9 +803,9 @@ class TaskPane(Widget, can_focus=True):
         self._edit_original: str = ""
         self._edit_is_new: bool = False
         # pending link operation
-        self._link_pending_section: str | None = None   # "how" | "constrain"
-        self._link_pending_type: str | None = None      # constrain type name
-        self._link_pending_idx: int = -1                # index in list, or -1 for new
+        self._link_pending_section: str | None = None  # "how" | "constrain"
+        self._link_pending_type: str | None = None  # constrain type name
+        self._link_pending_idx: int = -1  # index in list, or -1 for new
         # why rows count (set by _rebuild, used for cursor conversion)
         self._n_why_rows: int = 0
 
@@ -796,11 +828,21 @@ class TaskPane(Widget, can_focus=True):
         return self.query_one("#task-list", _TaskList)
 
     def _rebuild(self, keep_cursor: int = 0) -> None:
-        """Rebuild the displayed row list.
+        """Rebuild the displayed row list with blank-line spacers between sections.
 
-        Display order: scalar fields → why (backlinks) → how → constrain.
-        keep_cursor is an index into self.rows (scalar + how + constrain);
-        _rebuild converts it to the all_rows index by adding the why offset.
+        Display order:
+            description
+            [spacer]
+            other scalar fields
+            [spacer]
+            why section
+            [spacer]
+            how section
+            [spacer]
+            each constrain group
+
+        keep_cursor is an index into self.rows; we locate the target row by
+        object identity in all_rows (spacers are new objects, so they are skipped).
         """
         lv = self._lv()
         lv.clear()
@@ -817,16 +859,56 @@ class TaskPane(Widget, can_focus=True):
                 pass
         self._n_why_rows = len(why_rows)
 
-        # Convert keep_cursor from self.rows space to all_rows space
-        n_scalar = len(scalar_rows)
-        if keep_cursor >= n_scalar:
-            keep_cursor += self._n_why_rows
+        # Split scalar_rows into description + metadata
+        desc_rows = scalar_rows[:1]
+        meta_rows = scalar_rows[1:]
 
-        all_rows = scalar_rows + why_rows + section_rows
+        # Split section_rows into how group + per-type constrain groups
+        how_group = [r for r in section_rows if r.kind.startswith("how_")]
+        constrain_groups: list[list[Row]] = []
+        cur: list[Row] = []
+        for r in section_rows:
+            if r.kind == "constrain_header":
+                if cur:
+                    constrain_groups.append(cur)
+                cur = [r]
+            elif r.kind in ("constrain_item", "constrain_add"):
+                cur.append(r)
+        if cur:
+            constrain_groups.append(cur)
+
+        # Assemble with spacers between non-empty sections
+        def _join(*groups: list[Row]) -> list[Row]:
+            result: list[Row] = []
+            for g in groups:
+                if not g:
+                    continue
+                if result:
+                    result.append(Row("spacer", "", None))
+                result.extend(g)
+            return result
+
+        all_rows = _join(
+            desc_rows,
+            meta_rows,
+            why_rows,
+            how_group,
+            *constrain_groups,
+        )
+
+        # Locate keep_cursor target by object identity (skips spacers naturally)
+        target = self.rows[keep_cursor] if 0 <= keep_cursor < len(self.rows) else None
+        new_cursor = 0
+        if target is not None:
+            for i, r in enumerate(all_rows):
+                if r is target:
+                    new_cursor = i
+                    break
+
         self._all_rows = all_rows
-        self._cursor_idx = min(keep_cursor, len(all_rows) - 1) if all_rows else 0
+        self._cursor_idx = new_cursor
 
-        # Compute max description width across all link rows for column alignment
+        # Compute max description width for column alignment
         _link_kinds = {"how_item", "how_inline", "constrain_item"}
         link_desc_width = 0
         for row in all_rows:
@@ -837,8 +919,9 @@ class TaskPane(Widget, can_focus=True):
                 link_desc_width = max(link_desc_width, len(row.backlink_desc or ""))
 
         for i, row in enumerate(all_rows):
-            item = TaskRowItem(row, self.data, store=self.app.store,
-                               link_desc_width=link_desc_width)
+            item = TaskRowItem(
+                row, self.data, store=self.app.store, link_desc_width=link_desc_width
+            )
             item.selected = i == self._cursor_idx
             self._items.append(item)
             lv.append(item)
@@ -863,13 +946,19 @@ class TaskPane(Widget, can_focus=True):
         return self._items[idx] if 0 <= idx < len(self._items) else None
 
     def action_cursor_up(self) -> None:
-        if self._cursor_idx > 0:
-            self._set_cursor(self._cursor_idx - 1)
+        idx = self._cursor_idx - 1
+        while idx >= 0 and self._all_rows[idx].kind == "spacer":
+            idx -= 1
+        if idx >= 0:
+            self._set_cursor(idx)
 
     def action_cursor_down(self) -> None:
-        rows = getattr(self, "_all_rows", self.rows)
-        if self._cursor_idx < len(rows) - 1:
-            self._set_cursor(self._cursor_idx + 1)
+        rows = self._all_rows
+        idx = self._cursor_idx + 1
+        while idx < len(rows) and rows[idx].kind == "spacer":
+            idx += 1
+        if idx < len(rows):
+            self._set_cursor(idx)
 
     def action_follow_link(self) -> None:
         if self._editing:
@@ -911,10 +1000,18 @@ class TaskPane(Widget, can_focus=True):
             self._editing = True
             if row.kind in ("how_item", "how_inline") and row.idx is not None:
                 how = get_how(self.data)
-                edit_text = str(how[row.idx].get("description", "") or "") if row.idx < len(how) else ""
+                edit_text = (
+                    str(how[row.idx].get("description", "") or "")
+                    if row.idx < len(how)
+                    else ""
+                )
             elif row.kind == "constrain_item" and row.idx is not None:
                 constrain = get_constrain(self.data)
-                edit_text = str(constrain[row.idx].get("description", "") or "") if row.idx < len(constrain) else ""
+                edit_text = (
+                    str(constrain[row.idx].get("description", "") or "")
+                    if row.idx < len(constrain)
+                    else ""
+                )
             else:
                 edit_text = get_row_text(row, self.data)
             self._edit_original = edit_text
@@ -990,14 +1087,20 @@ class TaskPane(Widget, can_focus=True):
             if row.kind == "constrain_item" and row.idx is not None:
                 insert_at = row.idx + 1
             else:
-                positions = [i for i, e in enumerate(constrain) if e.get("type") == ct_name]
+                positions = [
+                    i for i, e in enumerate(constrain) if e.get("type") == ct_name
+                ]
                 insert_at = (positions[-1] + 1) if positions else len(constrain)
             constrain.insert(insert_at, {"type": ct_name, "description": ""})
             save_task(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
-                if r.kind == "constrain_item" and r.field == ct_name and r.idx == insert_at:
+                if (
+                    r.kind == "constrain_item"
+                    and r.field == ct_name
+                    and r.idx == insert_at
+                ):
                     cursor_pos = i
                     break
             self._rebuild(keep_cursor=cursor_pos)
@@ -1028,14 +1131,7 @@ class TaskPane(Widget, can_focus=True):
 
         save_task(self.path, self.data)
         self.rows = build_rows(self.data)
-        # Convert _cursor_idx (all_rows space) back to self.rows space for _rebuild
-        cursor = self._cursor_idx
-        n_scalar = sum(1 for r in self.rows if r.kind in ("simple", "text"))
-        if cursor >= n_scalar + self._n_why_rows:
-            cursor -= self._n_why_rows
-        elif cursor > n_scalar:
-            cursor = n_scalar
-        self._rebuild(keep_cursor=max(0, min(cursor, len(self.rows) - 1)))
+        self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
 
     # ── Add field ─────────────────────────────────────────────────────────────
 
@@ -1115,7 +1211,11 @@ class TaskPane(Widget, can_focus=True):
         if row and row.kind in ("how_header", "how_item", "how_inline", "how_add"):
             pending_idx = row.idx if row.kind in ("how_item", "how_inline") else -1
             self.app._start_linking("how", None, pending_idx)  # type: ignore[attr-defined]
-        elif row and row.kind in ("constrain_header", "constrain_item", "constrain_add"):
+        elif row and row.kind in (
+            "constrain_header",
+            "constrain_item",
+            "constrain_add",
+        ):
             pending_idx = row.idx if row.kind == "constrain_item" else -1
             self.app._start_linking("constrain", row.field, pending_idx)  # type: ignore[attr-defined]
         else:
@@ -1174,10 +1274,10 @@ class TaskPane(Widget, can_focus=True):
 # ── Context pane ──────────────────────────────────────────────────────────────
 
 STATUS_SYMBOLS: dict[str, str] = {
-    "todo":      "·",
-    "active":    "▶",
-    "stuck":     "!",
-    "done":      "✓",
+    "todo": "·",
+    "active": "▶",
+    "stuck": "!",
+    "done": "✓",
     "discarded": "×",
 }
 
@@ -1436,7 +1536,7 @@ class PfqApp(App):
         vault = self._initial_path.parent if self._initial_path else Path("data")
         yield Horizontal(
             Vertical(
-                _AppHeader(" pourquoifaire", id="app-header"),
+                _AppHeader("POURFAIREQUOI", id="app-header"),
                 FileNavPane(vault, self.store, id="file-nav"),
                 id="left-col",
             ),
@@ -1471,7 +1571,9 @@ class PfqApp(App):
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
-    def _start_linking(self, section: str, constrain_type: str | None, link_idx: int) -> None:
+    def _start_linking(
+        self, section: str, constrain_type: str | None, link_idx: int
+    ) -> None:
         pane = self.query_one("#task-pane", TaskPane)
         pane._link_pending_section = section
         pane._link_pending_type = constrain_type
@@ -1555,6 +1657,7 @@ class PfqApp(App):
         if not description:
             return
         from datetime import date
+
         vault = self.query_one("#file-nav", FileNavPane).vault
         path = new_filepath(description, vault)
         data: dict = {
@@ -1589,7 +1692,9 @@ class PfqApp(App):
 
     def _refresh_context(self) -> None:
         pane = self.query_one("#task-pane", TaskPane)
-        self.query_one("#context-pane", ContextPane).update_context(pane.path, self.store)
+        self.query_one("#context-pane", ContextPane).update_context(
+            pane.path, self.store
+        )
 
     def _open_file(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
