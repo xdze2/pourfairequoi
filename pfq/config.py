@@ -35,9 +35,11 @@ CONSTRAIN_TYPE_MAP: dict[str, ConstrainType] = {ct.name: ct for ct in CONSTRAIN_
 
 # status → (label, rich style)
 STATUSES: dict[str, tuple[str, str]] = {
-    "todo": ("todo", "dim yellow"),
+    "explore": ("explore", "dim magenta"),
+    "todo": ("todo", "bold yellow"),
+    "doable": ("doable", "dim yellow"),
     "active": ("active", "bold green"),
-    "stuck": ("stuck", "bold yellow"),
+    "stuck": ("stuck", "bold red"),
     "done": ("done", "green"),
     "discarded": ("discarded", "dim red"),
 }
