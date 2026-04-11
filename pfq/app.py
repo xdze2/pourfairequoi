@@ -293,40 +293,76 @@ class SubgraphPane(Widget, can_focus=True):
             self._entries = []
             return
 
-        up_nodes = self.store.traverse(path, "up")
-        down_nodes = self.store.traverse(path, "down")
-
-        max_up = max((n["depth"] for n in up_nodes), default=0)
-        up_sorted = sorted(up_nodes, key=lambda n: -n["depth"])
-
         entries: list[dict] = []
-        for node in up_sorted:
+
+        # ── Ancestors: roots first, simple indent (no tree chars) ─────────────
+        up_nodes = self.store.traverse(path, "up")
+        max_up = max((n["depth"] for n in up_nodes), default=0)
+
+        for node in sorted(up_nodes, key=lambda n: -n["depth"]):
             entries.append({
                 "path": node["path"],
-                "indent": max_up - node["depth"],
+                "tree_prefix": "  " * (max_up - node["depth"]),
                 "is_current": False,
                 "description": node["description"],
                 "status": node["status"],
             })
 
+        # ── Current node ──────────────────────────────────────────────────────
         data = self.store.get(path, {})
         entries.append({
             "path": path,
-            "indent": max_up,
+            "tree_prefix": "  " * max_up,
             "is_current": True,
             "description": str(data.get("description", "") or get_task_id(path)),
             "status": str(data.get("status", "") or ""),
         })
 
-        down_sorted = sorted(down_nodes, key=lambda n: (n["display_indent"], n["depth"]))
-        for node in down_sorted:
-            entries.append({
-                "path": node["path"],
-                "indent": max_up + node["display_indent"],
-                "is_current": False,
-                "description": node["description"],
-                "status": node["status"],
-            })
+        # ── Descendants: DFS with tree connector chars ─────────────────────────
+        visited: set[Path] = {path}
+
+        def _children(p: Path) -> list[dict]:
+            result = []
+            for e in get_how(self.store.get(p, {})):
+                if is_inline(e):
+                    result.append({"inline": True, "entry": e})
+                else:
+                    tid = (e.get("target_node") or "").upper()
+                    if tid:
+                        child = self.store.find(tid)
+                        if child and child not in visited:
+                            result.append({"inline": False, "path": child})
+            return result
+
+        def _dfs(p: Path, prefix: str) -> None:
+            kids = _children(p)
+            for i, kid in enumerate(kids):
+                last = i == len(kids) - 1
+                connector = "└── " if last else "├── "
+                continuation = "    " if last else "│   "
+                if kid["inline"]:
+                    e = kid["entry"]
+                    entries.append({
+                        "path": None,
+                        "tree_prefix": prefix + connector,
+                        "is_current": False,
+                        "description": str(e.get("description", "") or "(inline)"),
+                        "status": str(e.get("status", "") or ""),
+                    })
+                else:
+                    child = kid["path"]
+                    visited.add(child)
+                    cd = self.store.get(child, {})
+                    entries.append({
+                        "path": child,
+                        "tree_prefix": prefix + connector,
+                        "is_current": False,
+                        "description": str(cd.get("description", "") or get_task_id(child)),
+                        "status": str(cd.get("status", "") or ""),
+                    })
+                    _dfs(child, prefix + continuation)
+
+        _dfs(path, "  " * max_up)
 
         self._entries = entries
         for i, e in enumerate(entries):
@@ -350,13 +386,22 @@ class SubgraphPane(Widget, can_focus=True):
         for i, entry in enumerate(self._entries[self._scroll : self._scroll + height]):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
-            indent = "  " * entry["indent"]
-            marker = "► " if entry["is_current"] else "  "
+            prefix = entry["tree_prefix"]
             desc = entry["description"] or "—"
             status = entry["status"]
             line = Text(no_wrap=True, overflow="ellipsis")
-            style = "bold" if entry["is_current"] else ""
-            line.append(f"{indent}{marker}{desc}", style=style)
+            if entry["is_current"]:
+                line.append(prefix, style="dim")
+                line.append("► ", style="bold cyan")
+                line.append(desc, style="bold")
+            else:
+                # Split prefix into spaces + connector (last 4 chars if descendant)
+                if len(prefix) >= 4 and prefix[-4] in "├└":
+                    line.append(prefix[:-4], style="dim")
+                    line.append(prefix[-4:], style="dim cyan")
+                else:
+                    line.append(prefix, style="dim")
+                line.append(desc)
             if status:
                 line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
             if selected:
