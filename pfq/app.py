@@ -22,21 +22,7 @@ from textual.widgets import (
 )
 
 from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, STATUSES, TYPES
-from .model import (
-    find_path_by_id,
-    get_constrain,
-    get_how,
-    get_task_id,
-    is_inline,
-    load_all,
-    load_task,
-    new_filepath,
-    promote_inline,
-    save_task,
-    score_tasks,
-    sort_globally,
-    traverse_subgraph,
-)
+from .model import Store, find_path_by_id, get_constrain, get_how, get_task_id, is_inline, load_task
 
 
 # ── Modals ────────────────────────────────────────────────────────────────────
@@ -301,7 +287,7 @@ class FileNavPane(Widget, can_focus=True):
 
     def _apply_filter(self) -> None:
         q = self._query.lower()
-        sorted_nodes = sort_globally(self.store)
+        sorted_nodes = self.store.sort()
         self._indent = {p: indent for p, indent in sorted_nodes}
         if q:
             self._files = [
@@ -411,14 +397,14 @@ class FileNavPane(Widget, can_focus=True):
             return
         from datetime import date
 
-        path = new_filepath(description, self.vault)
-        data: dict = {
+        path, data = self.store.new_node(description)
+        data.update({
             "description": description,
             "type": "task",
             "status": "todo",
             "start_date": date.today().isoformat(),
-        }
-        save_task(path, data)
+        })
+        self.store.save(path, data)
         self.notify_file_added(path, data)
         self.app._open_in_task_pane(path)  # type: ignore[attr-defined]
 
@@ -435,8 +421,7 @@ class FileNavPane(Widget, can_focus=True):
     def _on_delete_confirmed(self, ok: bool, path: Path) -> None:
         if not ok:
             return
-        path.unlink(missing_ok=True)
-        self.store.pop(path, None)
+        self.store.remove(path)
         self._apply_filter()
         pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
         if pane.path == path:
@@ -978,7 +963,7 @@ class TaskPane(Widget, can_focus=True):
         elif row.kind == "how_inline" and row.idx is not None and self.path:
             # Promote inline node to file node, then navigate
             store = self.app.store
-            new_path = promote_inline(self.path, row.idx, store)
+            new_path = store.promote_inline(self.path, row.idx)
             self.app.query_one("#file-nav", FileNavPane).notify_file_added(  # type: ignore[attr-defined]
                 new_path, store[new_path]
             )
@@ -1025,7 +1010,7 @@ class TaskPane(Widget, can_focus=True):
         if row and item:
             set_row_text(row, self.data, event.value)
             if self.path:
-                save_task(self.path, self.data)
+                self.app.store.save(self.path, self.data)
             item.end_edit()
             if row.field == "description":
                 self._refresh_title()
@@ -1070,7 +1055,7 @@ class TaskPane(Widget, can_focus=True):
             else:
                 insert_at = len(how)
             how.insert(insert_at, {"description": ""})
-            save_task(self.path, self.data)
+            self.app.store.save(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1092,7 +1077,7 @@ class TaskPane(Widget, can_focus=True):
                 ]
                 insert_at = (positions[-1] + 1) if positions else len(constrain)
             constrain.insert(insert_at, {"type": ct_name, "description": ""})
-            save_task(self.path, self.data)
+            self.app.store.save(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1129,7 +1114,7 @@ class TaskPane(Widget, can_focus=True):
         else:
             return
 
-        save_task(self.path, self.data)
+        self.app.store.save(self.path, self.data)
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
 
@@ -1161,7 +1146,7 @@ class TaskPane(Widget, can_focus=True):
         if field == "how":
             how = self.data.setdefault("how", [])
             how.append({"description": ""})
-            save_task(self.path, self.data)
+            self.app.store.save(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1174,7 +1159,7 @@ class TaskPane(Widget, can_focus=True):
         elif field in CONSTRAIN_TYPE_MAP:
             constrain = self.data.setdefault("constrain", [])
             constrain.append({"type": field, "description": ""})
-            save_task(self.path, self.data)
+            self.app.store.save(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1186,7 +1171,7 @@ class TaskPane(Widget, can_focus=True):
             self.action_edit()
         else:
             self.data[field] = ""
-            save_task(self.path, self.data)
+            self.app.store.save(self.path, self.data)
             self.rows = build_rows(self.data)
             cursor_pos = 0
             for i, r in enumerate(self.rows):
@@ -1266,7 +1251,7 @@ class TaskPane(Widget, can_focus=True):
             constrain = get_constrain(self.data)
             if idx < len(constrain):
                 constrain[idx].pop("target_node", None)
-        save_task(self.path, self.data)
+        self.app.store.save(self.path, self.data)
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=self._cursor_idx)
 
@@ -1312,8 +1297,8 @@ class ContextPane(Widget):
         status = str(data.get("status", "") or "")
         node_type = str(data.get("type", "") or "")
 
-        why_nodes = traverse_subgraph(self._path, self._store, "up")
-        how_nodes = traverse_subgraph(self._path, self._store, "down")
+        why_nodes = self._store.traverse(self._path, "up")
+        how_nodes = self._store.traverse(self._path, "down")
 
         t = Text(overflow="fold")
 
@@ -1530,7 +1515,7 @@ class PfqApp(App):
         self._initial_path = path
         self._history: list[Path] = []
         vault = path.parent if path else Path("data")
-        self.store: dict[Path, dict] = load_all(vault)
+        self.store = Store(vault)
 
     def compose(self) -> ComposeResult:
         vault = self._initial_path.parent if self._initial_path else Path("data")
@@ -1589,7 +1574,7 @@ class PfqApp(App):
                 constrain = get_constrain(pane.data)
                 if link_idx < len(constrain):
                     query = str(constrain[link_idx].get("description", "") or "")
-        scores = score_tasks(query, self.store) if query else {}
+        scores = self.store.score(query) if query else {}
         picker = self.query_one("#link-picker", LinkPickerPane)
         picker.refresh_files(scores=scores or None)
         picker.cursor = 0
@@ -1622,7 +1607,7 @@ class PfqApp(App):
             else:
                 constrain.append({"type": constrain_type, "target_node": target_id})
 
-        save_task(pane.path, pane.data)
+        self.store.save(pane.path, pane.data)
         pane.rows = build_rows(pane.data)
         pane._rebuild(keep_cursor=pane._cursor_idx)
         pane._link_pending_section = None
@@ -1658,16 +1643,14 @@ class PfqApp(App):
             return
         from datetime import date
 
-        vault = self.query_one("#file-nav", FileNavPane).vault
-        path = new_filepath(description, vault)
-        data: dict = {
+        path, data = self.store.new_node(description)
+        data.update({
             "description": description,
             "type": "task",
             "status": "todo",
             "start_date": date.today().isoformat(),
-        }
-        save_task(path, data)
-        self.store[path] = data
+        })
+        self.store.save(path, data)
         self.query_one("#file-nav", FileNavPane).notify_file_added(path, data)
         self._apply_link(path)
 
@@ -1681,7 +1664,7 @@ class PfqApp(App):
         pane = self.query_one("#task-pane", TaskPane)
         if not pane.path:
             return
-        target = find_path_by_id(link_id, self.store)
+        target = self.store.find(link_id)
         if target:
             self._history.append(pane.path)
             self._open_file(target)
@@ -1699,7 +1682,7 @@ class PfqApp(App):
     def _open_file(self, path: Path) -> None:
         pane = self.query_one("#task-pane", TaskPane)
         pane.path = path
-        data = self.store.get(path) or load_task(path)
+        data = self.store.get(path) or {}
         self.store[path] = data
         pane.data = data
         pane.rows = build_rows(pane.data)

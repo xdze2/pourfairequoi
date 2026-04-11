@@ -8,40 +8,30 @@ from pathlib import Path
 
 import yaml
 
-VAULT = Path("data")
+_VAULT = Path("data")
 
 
-def generate_id(length: int = 6) -> str:
+# ── Low-level file I/O (private helpers) ─────────────────────────────────────
+
+
+def _generate_id(length: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 
-def slugify(text: str) -> str:
+def _slugify(text: str) -> str:
     text = text.lower()
     text = re.sub(r"[^\w]+", "_", text)
     return text.strip("_")[:40]
 
 
-def new_filepath(description: str, vault: Path = VAULT) -> Path:
+def _new_filepath(description: str, vault: Path) -> Path:
     vault.mkdir(parents=True, exist_ok=True)
-    return vault / f"{generate_id()}_{slugify(description)}.yaml"
+    return vault / f"{_generate_id()}_{_slugify(description)}.yaml"
 
 
 def load_task(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def load_all(vault: Path) -> dict[Path, dict]:
-    result: dict[Path, dict] = {}
-    if not vault.exists():
-        return result
-    for p in sorted(vault.iterdir()):
-        if p.suffix in (".yaml", ".yml"):
-            try:
-                result[p] = load_task(p)
-            except Exception:
-                result[p] = {}
-    return result
 
 
 def save_task(path: Path, data: dict) -> None:
@@ -58,17 +48,8 @@ def get_task_id(path: Path) -> str:
     return path.stem.split("_")[0]
 
 
-def find_file_by_id(task_id: str, vault: Path) -> Path | None:
-    if not vault.exists():
-        return None
-    for p in sorted(vault.iterdir()):
-        if p.suffix in (".yaml", ".yml"):
-            if p.stem.upper().startswith(task_id.upper()):
-                return p
-    return None
-
-
-def find_path_by_id(task_id: str, store: dict[Path, dict]) -> Path | None:
+def find_path_by_id(task_id: str, store) -> Path | None:
+    """Return the path whose filename starts with task_id (works with Store or dict)."""
     task_id_upper = task_id.upper()
     for p in store:
         if p.stem.upper().startswith(task_id_upper):
@@ -76,7 +57,8 @@ def find_path_by_id(task_id: str, store: dict[Path, dict]) -> Path | None:
     return None
 
 
-# ── Section accessors ─────────────────────────────────────────────────────────
+# ── Section accessors (pure, work on plain dicts) ─────────────────────────────
+
 
 def get_how(data: dict) -> list[dict]:
     """Return the how list. Each entry is either:
@@ -102,215 +84,274 @@ def is_inline(entry: dict) -> bool:
     return "target_node" not in entry
 
 
-def promote_inline(
-    parent_path: Path,
-    how_index: int,
-    store: dict[Path, dict],
-) -> Path:
+# ── Store ─────────────────────────────────────────────────────────────────────
+
+
+class Store:
+    """In-memory cache of all YAML nodes in a vault, with graph query methods.
+
+    Supports dict-like read access so widgets can use store[path], store.get(),
+    store.items(), etc. without needing to know about the class.
     """
-    Promote an inline how entry to a file node.
-    Replaces the inline dict in the parent with {"target_node": new_id}.
-    Saves the parent and adds the new file to the store.
-    Returns the new file path.
-    """
-    parent_data = store[parent_path]
-    how = get_how(parent_data)
-    inline = how[how_index]
 
-    description = str(inline.get("description", "") or "untitled")
-    new_path = new_filepath(description, parent_path.parent)
+    def __init__(self, vault: Path = _VAULT) -> None:
+        self.vault = vault
+        self._data: dict[Path, dict] = {}
+        if vault.exists():
+            for p in sorted(vault.iterdir()):
+                if p.suffix in (".yaml", ".yml"):
+                    try:
+                        self._data[p] = load_task(p)
+                    except Exception:
+                        self._data[p] = {}
 
-    # Build the new file node data
-    new_data: dict = {}
-    for key in ("type", "description", "status", "start_date", "due_date", "horizon", "notes", "conclusion"):
-        if key in inline:
-            new_data[key] = inline[key]
-    if "description" not in new_data:
-        new_data["description"] = description
+    # ── Dict-like interface ───────────────────────────────────────────────────
 
-    save_task(new_path, new_data)
-    store[new_path] = new_data
+    def __getitem__(self, path: Path) -> dict:
+        return self._data[path]
 
-    # Replace inline entry with file reference in parent
-    how[how_index] = {"target_node": get_task_id(new_path)}
-    save_task(parent_path, parent_data)
+    def __setitem__(self, path: Path, data: dict) -> None:
+        self._data[path] = data
 
-    return new_path
+    def __contains__(self, path: object) -> bool:
+        return path in self._data
 
+    def __iter__(self):
+        return iter(self._data)
 
-# ── Graph algorithms ──────────────────────────────────────────────────────────
+    def __len__(self) -> int:
+        return len(self._data)
 
-def sort_globally(store: dict[Path, dict]) -> list[tuple[Path, int]]:
-    """
-    Order all file nodes from most abstract (top) to most concrete (bottom).
+    def get(self, path: Path, default: dict | None = None) -> dict | None:
+        return self._data.get(path, default)
 
-    Each node declares its children via how: entries with target_node.
-    Roots = nodes not referenced as a child by any other node.
-    Indentation formula: max(0, depth - max(0, in_degree - 1))
-    """
-    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
+    def keys(self):
+        return self._data.keys()
 
-    # how_children[A] = file nodes that A declares as how children
-    how_children: dict[Path, list[Path]] = {p: [] for p in store}
-    # in_degree[B] = number of file nodes that declare B as a how child
-    in_degree: dict[Path, int] = {p: 0 for p in store}
-    has_parent: set[Path] = set()
+    def items(self):
+        return self._data.items()
 
-    for path, data in store.items():
-        for entry in get_how(data):
-            target_id = (entry.get("target_node") or "").upper()
-            if not target_id:
-                continue
-            target_path = id_to_path.get(target_id)
-            if target_path and target_path != path:
-                how_children[path].append(target_path)
-                in_degree[target_path] = in_degree.get(target_path, 0) + 1
-                has_parent.add(target_path)
+    # ── Node lifecycle ────────────────────────────────────────────────────────
 
-    roots = sorted(p for p in store if p not in has_parent)
+    def new_node(self, description: str) -> tuple[Path, dict]:
+        """Create a new YAML file, register it in the store, return (path, data)."""
+        path = _new_filepath(description, self.vault)
+        data: dict = {}
+        self._data[path] = data
+        return path, data
 
-    visited: dict[Path, int] = {}
-    queue: list[tuple[Path, int]] = []
-    for p in roots:
-        visited[p] = 0
-        queue.append((p, 0))
+    def save(self, path: Path, data: dict) -> None:
+        """Persist data to disk and keep the store in sync."""
+        save_task(path, data)
+        self._data[path] = data
 
-    head = 0
-    while head < len(queue):
-        current_path, current_depth = queue[head]
-        head += 1
-        for child in how_children.get(current_path, []):
-            if child not in visited:
-                visited[child] = current_depth + 1
-                queue.append((child, current_depth + 1))
+    def remove(self, path: Path) -> None:
+        """Delete the file from disk and from the store."""
+        path.unlink(missing_ok=True)
+        self._data.pop(path, None)
 
-    result: list[tuple[Path, int]] = []
-    for path, depth in queue:
-        deg = in_degree.get(path, 0)
-        display_indent = 0 if deg == 0 else max(1, depth - max(0, deg - 1))
-        result.append((path, display_indent))
+    # ── Graph queries ─────────────────────────────────────────────────────────
 
-    for p in sorted(store):
-        if p not in visited:
-            result.append((p, 0))
+    def find(self, task_id: str) -> Path | None:
+        """Return the path whose filename starts with task_id (case-insensitive)."""
+        task_id_upper = task_id.upper()
+        for p in self._data:
+            if p.stem.upper().startswith(task_id_upper):
+                return p
+        return None
 
-    return result
+    def sort(self) -> list[tuple[Path, int]]:
+        """Order all nodes from most abstract (roots) to most concrete (leaves).
 
+        Returns list of (path, display_indent).
+        Roots = nodes not referenced as a how child by any other node.
+        Indentation formula: 0 if root, else max(1, depth - max(0, in_degree - 1))
+        """
+        id_to_path: dict[str, Path] = {get_task_id(p): p for p in self._data}
 
-def traverse_subgraph(
-    start_path: Path,
-    store: dict[Path, dict],
-    direction: str,  # "down" (how children) or "up" (parents that declare us)
-) -> list[dict]:
-    """
-    BFS traversal from start_path.
+        how_children: dict[Path, list[Path]] = {p: [] for p in self._data}
+        in_degree: dict[Path, int] = {p: 0 for p in self._data}
+        has_parent: set[Path] = set()
 
-    "down": follow how → target_node entries declared in each node.
-    "up":   scan the store for nodes that declare start_path as a how child.
-
-    Returns a list of node dicts:
-      path, data, description, status, depth, in_degree, display_indent
-    Inline how entries are included in "down" at depth 1 (no further traversal).
-    """
-    id_to_path: dict[str, Path] = {get_task_id(p): p for p in store}
-    start_id = get_task_id(start_path).upper()
-
-    def how_file_children(path: Path) -> list[Path]:
-        result = []
-        for entry in get_how(store.get(path, {})):
-            tid = (entry.get("target_node") or "").upper()
-            if tid:
-                tp = id_to_path.get(tid)
-                if tp and tp != path:
-                    result.append(tp)
-        return result
-
-    def how_parents(path: Path) -> list[Path]:
-        path_id = get_task_id(path).upper()
-        result = []
-        for p, data in store.items():
-            if p == path:
-                continue
+        for path, data in self._data.items():
             for entry in get_how(data):
-                if (entry.get("target_node") or "").upper() == path_id:
-                    result.append(p)
-                    break
+                target_id = (entry.get("target_node") or "").upper()
+                if not target_id:
+                    continue
+                target_path = id_to_path.get(target_id)
+                if target_path and target_path != path:
+                    how_children[path].append(target_path)
+                    in_degree[target_path] = in_degree.get(target_path, 0) + 1
+                    has_parent.add(target_path)
+
+        roots = sorted(p for p in self._data if p not in has_parent)
+
+        visited: dict[Path, int] = {}
+        queue: list[tuple[Path, int]] = []
+        for p in roots:
+            visited[p] = 0
+            queue.append((p, 0))
+
+        head = 0
+        while head < len(queue):
+            current_path, current_depth = queue[head]
+            head += 1
+            for child in how_children.get(current_path, []):
+                if child not in visited:
+                    visited[child] = current_depth + 1
+                    queue.append((child, current_depth + 1))
+
+        result: list[tuple[Path, int]] = []
+        for path, depth in queue:
+            deg = in_degree.get(path, 0)
+            display_indent = 0 if deg == 0 else max(1, depth - max(0, deg - 1))
+            result.append((path, display_indent))
+
+        for p in sorted(self._data):
+            if p not in visited:
+                result.append((p, 0))
+
         return result
 
-    neighbors = how_file_children if direction == "down" else how_parents
+    def traverse(self, start_path: Path, direction: str) -> list[dict]:
+        """BFS traversal from start_path.
 
-    visited: dict[Path, int] = {}
-    in_degree: dict[Path, int] = {}
-    queue: list[tuple[Path, int]] = []
+        direction="down": follow how → target_node entries declared in each node.
+        direction="up":   find nodes that declare start_path as a how child.
 
-    for neighbor in neighbors(start_path):
-        if neighbor == start_path:
-            continue
-        in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
-        if neighbor not in visited:
-            visited[neighbor] = 1
-            queue.append((neighbor, 1))
+        Returns list of node dicts: path, data, description, status, depth,
+        in_degree, display_indent.
+        Inline how entries are included in "down" at depth 1.
+        """
+        id_to_path: dict[str, Path] = {get_task_id(p): p for p in self._data}
 
-    head = 0
-    while head < len(queue):
-        current_path, current_depth = queue[head]
-        head += 1
-        for neighbor in neighbors(current_path):
+        def how_file_children(path: Path) -> list[Path]:
+            result = []
+            for entry in get_how(self._data.get(path, {})):
+                tid = (entry.get("target_node") or "").upper()
+                if tid:
+                    tp = id_to_path.get(tid)
+                    if tp and tp != path:
+                        result.append(tp)
+            return result
+
+        def how_parents(path: Path) -> list[Path]:
+            path_id = get_task_id(path).upper()
+            result = []
+            for p, data in self._data.items():
+                if p == path:
+                    continue
+                for entry in get_how(data):
+                    if (entry.get("target_node") or "").upper() == path_id:
+                        result.append(p)
+                        break
+            return result
+
+        neighbors = how_file_children if direction == "down" else how_parents
+
+        visited: dict[Path, int] = {}
+        in_degree: dict[Path, int] = {}
+        queue: list[tuple[Path, int]] = []
+
+        for neighbor in neighbors(start_path):
             if neighbor == start_path:
                 continue
             in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
             if neighbor not in visited:
-                visited[neighbor] = current_depth + 1
-                queue.append((neighbor, current_depth + 1))
+                visited[neighbor] = 1
+                queue.append((neighbor, 1))
 
-    # Inline how entries (down only, depth 1, no further traversal)
-    inline_nodes: list[dict] = []
-    if direction == "down":
-        for entry in get_how(store.get(start_path, {})):
-            if is_inline(entry):
-                inline_nodes.append({
-                    "path": None, "data": entry,
-                    "description": str(entry.get("description", "") or ""),
-                    "status": str(entry.get("status", "") or ""),
-                    "depth": 1, "in_degree": 1, "display_indent": 1,
-                })
+        head = 0
+        while head < len(queue):
+            current_path, current_depth = queue[head]
+            head += 1
+            for neighbor in neighbors(current_path):
+                if neighbor == start_path:
+                    continue
+                in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+                if neighbor not in visited:
+                    visited[neighbor] = current_depth + 1
+                    queue.append((neighbor, current_depth + 1))
 
-    result: list[dict] = list(inline_nodes)
-    for path, depth in visited.items():
-        deg = in_degree.get(path, 1)
-        data = store.get(path, {})
-        display_indent = max(1, depth - (deg - 1))
-        result.append({
-            "path": path, "data": data,
-            "description": str(data.get("description", "") or get_task_id(path)),
-            "status": str(data.get("status", "") or ""),
-            "depth": depth, "in_degree": deg, "display_indent": display_indent,
-        })
+        inline_nodes: list[dict] = []
+        if direction == "down":
+            for entry in get_how(self._data.get(start_path, {})):
+                if is_inline(entry):
+                    inline_nodes.append({
+                        "path": None, "data": entry,
+                        "description": str(entry.get("description", "") or ""),
+                        "status": str(entry.get("status", "") or ""),
+                        "depth": 1, "in_degree": 1, "display_indent": 1,
+                    })
 
-    result.sort(key=lambda n: (n["display_indent"], -n["in_degree"], n["depth"]))
-    return result
+        result: list[dict] = list(inline_nodes)
+        for path, depth in visited.items():
+            deg = in_degree.get(path, 1)
+            data = self._data.get(path, {})
+            display_indent = max(1, depth - (deg - 1))
+            result.append({
+                "path": path, "data": data,
+                "description": str(data.get("description", "") or get_task_id(path)),
+                "status": str(data.get("status", "") or ""),
+                "depth": depth, "in_degree": deg, "display_indent": display_indent,
+            })
+
+        result.sort(key=lambda n: (n["display_indent"], -n["in_degree"], n["depth"]))
+        return result
+
+    def score(self, query: str) -> dict[Path, float]:
+        """Score each node by word overlap with query (Jaccard similarity)."""
+        _STOP = {"a", "an", "the", "to", "of", "and", "or", "in", "for", "is", "it"}
+
+        def tokenize(text: str) -> set[str]:
+            words = re.sub(r"[^\w]+", " ", text.lower()).split()
+            return {w for w in words if w not in _STOP and len(w) > 1}
+
+        query_words = tokenize(query)
+        if not query_words:
+            return {p: 0.0 for p in self._data}
+
+        scores: dict[Path, float] = {}
+        for path, data in self._data.items():
+            desc = str(data.get("description", "") or "")
+            task_words = tokenize(desc)
+            overlap = len(query_words & task_words)
+            union = len(query_words | task_words)
+            scores[path] = overlap / union if union else 0.0
+        return scores
+
+    def promote_inline(self, parent_path: Path, how_index: int) -> Path:
+        """Promote an inline how entry to a file node.
+
+        Replaces the inline dict in the parent with {"target_node": new_id},
+        saves both files, updates the store.
+        Returns the new file path.
+        """
+        parent_data = self._data[parent_path]
+        how = get_how(parent_data)
+        inline = how[how_index]
+
+        description = str(inline.get("description", "") or "untitled")
+        new_path = _new_filepath(description, parent_path.parent)
+
+        new_data: dict = {}
+        for key in ("type", "description", "status", "start_date", "due_date",
+                    "horizon", "notes", "conclusion"):
+            if key in inline:
+                new_data[key] = inline[key]
+        if "description" not in new_data:
+            new_data["description"] = description
+
+        save_task(new_path, new_data)
+        self._data[new_path] = new_data
+
+        how[how_index] = {"target_node": get_task_id(new_path)}
+        save_task(parent_path, parent_data)
+
+        return new_path
 
 
-def score_tasks(query: str, store: dict[Path, dict]) -> dict[Path, float]:
-    """Score each task by word overlap with query (Jaccard similarity)."""
-    _STOP = {"a", "an", "the", "to", "of", "and", "or", "in", "for", "is", "it"}
-
-    def tokenize(text: str) -> set[str]:
-        words = re.sub(r"[^\w]+", " ", text.lower()).split()
-        return {w for w in words if w not in _STOP and len(w) > 1}
-
-    query_words = tokenize(query)
-    if not query_words:
-        return {p: 0.0 for p in store}
-
-    scores: dict[Path, float] = {}
-    for path, data in store.items():
-        desc = str(data.get("description", "") or "")
-        task_words = tokenize(desc)
-        overlap = len(query_words & task_words)
-        union = len(query_words | task_words)
-        scores[path] = overlap / union if union else 0.0
-    return scores
+# ── Migration utility ─────────────────────────────────────────────────────────
 
 
 def migrate_task(data: dict) -> dict:
@@ -338,7 +379,6 @@ def migrate_task(data: dict) -> dict:
             if entry:
                 how.append(entry)
         elif ltype == "why":
-            # old why links become nothing — parents will now declare how
             pass
         elif ltype in CONSTRAIN_TYPE_MAP or ltype in ("need", "required_by", "or"):
             mapped = "alternative_to" if ltype == "or" else ltype

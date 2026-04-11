@@ -6,12 +6,13 @@ Usage:
     python screenshot.py                    # all scenes
     python screenshot.py --out docs/shots   # custom output dir
 """
+
 import asyncio
 import argparse
 from pathlib import Path
 
 from pfq.app import PfqApp
-from pfq.model import load_all, get_task_id
+from pfq.model import load_all_task, get_task_id
 
 
 async def shot(app: PfqApp, pilot, name: str, out: Path) -> None:
@@ -23,7 +24,7 @@ async def shot(app: PfqApp, pilot, name: str, out: Path) -> None:
 
 async def run_screenshots(vault: Path, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    store = load_all(vault)
+    store = load_all_task(vault)
     paths = sorted(store.keys())
 
     app = PfqApp()
