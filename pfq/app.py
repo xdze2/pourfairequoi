@@ -486,6 +486,7 @@ class SubgraphPane(Widget, can_focus=True):
                     "tree_prefix": "    " * (node["depth"] - 1) + "┌── ",
                     "is_current": False,
                     "description": node["description"],
+                    "node_type": str(ndata.get("type", "") or ""),
                     "status": node["status"],
                     "tl_start": ts,
                     "tl_horizon": th,
@@ -502,6 +503,7 @@ class SubgraphPane(Widget, can_focus=True):
                 "tree_prefix": "",
                 "is_current": True,
                 "description": str(data.get("description", "") or get_task_id(path)),
+                "node_type": str(data.get("type", "") or ""),
                 "status": str(data.get("status", "") or ""),
                 "tl_start": cur_ts,
                 "tl_horizon": cur_th,
@@ -539,6 +541,7 @@ class SubgraphPane(Widget, can_focus=True):
                         "description": str(
                             cd.get("description", "") or get_task_id(child)
                         ),
+                        "node_type": str(cd.get("type", "") or ""),
                         "status": str(cd.get("status", "") or ""),
                         "tl_start": ts,
                         "tl_horizon": th,
@@ -605,12 +608,14 @@ class SubgraphPane(Widget, can_focus=True):
 
         visible = self._entries[self._scroll : self._scroll + height]
 
-        _MARGIN_W = 4  # chars for "why ", " ^  ", " |> ", "how ", etc.
+        _MARGIN_W = 4   # chars for "why ", " │  ", " ▶  ", "how ", etc.
+        _TYPE_W = 10    # "constraint" is longest type label
+        _STATUS_W = 9   # "discarded" is longest status label
+        _CHIP_GAP = 2   # spaces between desc and type chip, and between chips
 
-        # Compute max (margin + prefix + desc) width so timeline starts at a fixed column
+        # Compute max (margin + prefix + desc) width for alignment
         desc_col = 0
         for i, entry in enumerate(visible):
-            abs_i = i + self._scroll
             w = (
                 _MARGIN_W
                 + len(entry["tree_prefix"])
@@ -618,9 +623,9 @@ class SubgraphPane(Widget, can_focus=True):
             )
             desc_col = max(desc_col, w)
 
-        # Timeline width: whatever remains after desc_col + 2 spaces padding
+        # Timeline width: whatever remains after desc_col + chips + padding
         total_width = self.size.width or 80
-        tl_width = max(10, total_width - desc_col - 2)
+        tl_width = max(10, total_width - desc_col - _CHIP_GAP - _TYPE_W - _CHIP_GAP - _STATUS_W - _CHIP_GAP)
 
         t = Text(no_wrap=True, overflow="ellipsis")
         for i, entry in enumerate(visible):
@@ -638,12 +643,16 @@ class SubgraphPane(Widget, can_focus=True):
             else:
                 line.append(margin, style="dim cyan")
             # Tree prefix + description
+            node_type = entry.get("node_type", "")
+            status = entry.get("status", "")
+            _, status_style = STATUSES.get(status, ("", "dim"))
+            _, type_style = TYPES.get(node_type, ("", "dim"))
             if entry.get("is_root_link"):
                 line.append(desc, style="dim")
                 used = _MARGIN_W + len(desc)
             elif entry["is_current"]:
                 line.append(prefix, style="dim")
-                line.append(desc, style="bold")
+                line.append(desc, style=f"bold {status_style}" if status_style else "bold")
                 used = _MARGIN_W + len(prefix) + len(desc)
             else:
                 if len(prefix) >= 4 and prefix[-4] in "├└┌":
@@ -653,11 +662,22 @@ class SubgraphPane(Widget, can_focus=True):
                     line.append(prefix, style="dim")
                 line.append(desc)
                 used = _MARGIN_W + len(prefix) + len(desc)
-            # Pad to align timeline
+            # Pad desc to fixed column
             gap = desc_col - used
             if gap > 0:
                 line.append(" " * gap)
-            line.append("  ")
+            # Type chip (fixed width)
+            if not entry.get("is_root_link"):
+                type_label = TYPES.get(node_type, (node_type, "dim"))[0] if node_type else ""
+                line.append(" " * _CHIP_GAP)
+                line.append(type_label.ljust(_TYPE_W), style=type_style if type_label else "")
+                # Status chip (fixed width)
+                status_label = STATUSES.get(status, (status, "dim"))[0] if status else ""
+                line.append(" " * _CHIP_GAP)
+                line.append(status_label.ljust(_STATUS_W), style=status_style if status_label else "")
+                line.append(" " * _CHIP_GAP)
+            else:
+                line.append(" " * (_CHIP_GAP + _TYPE_W + _CHIP_GAP + _STATUS_W + _CHIP_GAP))
             # Timeline bar
             _append_timeline(line, entry, tl_width)
             if selected:
