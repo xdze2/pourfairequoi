@@ -23,7 +23,7 @@ from textual.widgets import (
     Static,
 )
 
-from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, STATUSES, TYPES
+from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, HORIZONS, STATUSES, TYPES
 from .model import (
     Store,
     find_path_by_id,
@@ -92,6 +92,37 @@ class ConfirmModal(ModalScreen[bool]):
 
     def action_no(self) -> None:
         self.dismiss(False)
+
+
+# Fields that get a value picker instead of free-text editing
+_PICKER_FIELDS: dict[str, dict[str, tuple[str, str]]] = {
+    "type": TYPES,
+    "status": STATUSES,
+    "horizon": HORIZONS,
+}
+
+
+class ValuePickerModal(ModalScreen[Optional[str]]):
+    CSS = _MODAL_CSS.format(name="ValuePickerModal")
+    BINDINGS = [Binding("escape", "dismiss", show=False)]
+
+    def __init__(self, field: str, current: str = "") -> None:
+        super().__init__()
+        self._field = field
+        self._current = current
+        self._choices = _PICKER_FIELDS.get(field, {})
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal-box"):
+            yield Label(f"Select {self._field}:")
+            with ListView():
+                for key, (label, style) in self._choices.items():
+                    marker = "► " if key == self._current else "  "
+                    t = Text(f"{marker}{label}", style=style)
+                    yield ListItem(Label(t), id=f"val-{key}")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.dismiss(event.item.id.removeprefix("val-"))
 
 
 # ── Row model ─────────────────────────────────────────────────────────────────
@@ -1360,26 +1391,45 @@ class TaskPane(Widget, can_focus=True):
             return
         row = self.current_row()
         item = self._current_item()
-        if row and row.editable and item:
-            self._editing = True
-            if row.kind in ("how_item", "how_inline") and row.idx is not None:
-                how = get_how(self.data)
-                edit_text = (
-                    str(how[row.idx].get("description", "") or "")
-                    if row.idx < len(how)
-                    else ""
-                )
-            elif row.kind == "constrain_item" and row.idx is not None:
-                constrain = get_constrain(self.data)
-                edit_text = (
-                    str(constrain[row.idx].get("description", "") or "")
-                    if row.idx < len(constrain)
-                    else ""
-                )
-            else:
-                edit_text = get_row_text(row, self.data)
-            self._edit_original = edit_text
-            item.begin_edit(edit_text)
+        if row is None or not row.editable or item is None:
+            return
+        # Picker fields: open a selection modal instead of inline text input
+        if row.kind == "simple" and row.field in _PICKER_FIELDS:
+            current = str(self.data.get(row.field, "") or "")
+            self.app.push_screen(  # type: ignore[attr-defined]
+                ValuePickerModal(row.field, current),
+                lambda val, r=row: self._on_picker_chosen(val, r),
+            )
+            return
+        self._editing = True
+        if row.kind in ("how_item", "how_inline") and row.idx is not None:
+            how = get_how(self.data)
+            edit_text = (
+                str(how[row.idx].get("description", "") or "")
+                if row.idx < len(how)
+                else ""
+            )
+        elif row.kind == "constrain_item" and row.idx is not None:
+            constrain = get_constrain(self.data)
+            edit_text = (
+                str(constrain[row.idx].get("description", "") or "")
+                if row.idx < len(constrain)
+                else ""
+            )
+        else:
+            edit_text = get_row_text(row, self.data)
+        self._edit_original = edit_text
+        item.begin_edit(edit_text)
+
+    def _on_picker_chosen(self, value: str | None, row: Row) -> None:
+        if value is None or not self.path:
+            return
+        set_row_text(row, self.data, value)
+        self._save()
+        self.rows = build_rows(self.data)
+        self._rebuild(keep_cursor=self._cursor_idx)
+        if row.field in ("type", "status"):
+            self._refresh_title()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if not self._editing:
