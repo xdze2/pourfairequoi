@@ -22,7 +22,15 @@ from textual.widgets import (
 )
 
 from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, STATUSES, TYPES
-from .model import Store, find_path_by_id, get_constrain, get_how, get_task_id, is_inline, load_task
+from .model import (
+    Store,
+    find_path_by_id,
+    get_constrain,
+    get_how,
+    get_task_id,
+    is_inline,
+    load_task,
+)
 
 
 # ── Modals ────────────────────────────────────────────────────────────────────
@@ -300,23 +308,27 @@ class SubgraphPane(Widget, can_focus=True):
         # indent = "    " * (depth - 1)  →  parent has 0 extra indent, root has most
         up_nodes = self.store.traverse(path, "up")
         for node in sorted(up_nodes, key=lambda n: -n["depth"]):
-            entries.append({
-                "path": node["path"],
-                "tree_prefix": "    " * (node["depth"] - 1) + "┌── ",
-                "is_current": False,
-                "description": node["description"],
-                "status": node["status"],
-            })
+            entries.append(
+                {
+                    "path": node["path"],
+                    "tree_prefix": "    " * (node["depth"] - 1) + "┌── ",
+                    "is_current": False,
+                    "description": node["description"],
+                    "status": node["status"],
+                }
+            )
 
         # ── Current node ──────────────────────────────────────────────────────
         data = self.store.get(path, {})
-        entries.append({
-            "path": path,
-            "tree_prefix": "",
-            "is_current": True,
-            "description": str(data.get("description", "") or get_task_id(path)),
-            "status": str(data.get("status", "") or ""),
-        })
+        entries.append(
+            {
+                "path": path,
+                "tree_prefix": "",
+                "is_current": True,
+                "description": str(data.get("description", "") or get_task_id(path)),
+                "status": str(data.get("status", "") or ""),
+            }
+        )
 
         # ── Descendants: DFS with normal tree connectors ───────────────────────
         visited: set[Path] = {path}
@@ -342,24 +354,31 @@ class SubgraphPane(Widget, can_focus=True):
                 continuation = "    " if last else "│   "
                 if kid["inline"]:
                     e = kid["entry"]
-                    entries.append({
-                        "path": None,
-                        "tree_prefix": prefix + connector,
-                        "is_current": False,
-                        "description": str(e.get("description", "") or "(inline)"),
-                        "status": str(e.get("status", "") or ""),
-                    })
+                    entries.append(
+                        {
+                            "path": None,
+                            "tree_prefix": prefix + connector,
+                            "is_current": False,
+                            "description": str(e.get("description", "") or "(inline)"),
+                            "status": str(e.get("status", "") or ""),
+                            "_entry_data": e,
+                        }
+                    )
                 else:
                     child = kid["path"]
                     visited.add(child)
                     cd = self.store.get(child, {})
-                    entries.append({
-                        "path": child,
-                        "tree_prefix": prefix + connector,
-                        "is_current": False,
-                        "description": str(cd.get("description", "") or get_task_id(child)),
-                        "status": str(cd.get("status", "") or ""),
-                    })
+                    entries.append(
+                        {
+                            "path": child,
+                            "tree_prefix": prefix + connector,
+                            "is_current": False,
+                            "description": str(
+                                cd.get("description", "") or get_task_id(child)
+                            ),
+                            "status": str(cd.get("status", "") or ""),
+                        }
+                    )
                     _dfs(child, prefix + continuation)
 
         _dfs(path, "")
@@ -382,28 +401,46 @@ class SubgraphPane(Widget, can_focus=True):
         elif self._entries and self.cursor >= self._scroll + height:
             self._scroll = self.cursor - height + 1
 
+        visible = self._entries[self._scroll : self._scroll + height]
+
+        # Compute max (prefix + desc) width for chip alignment
+        desc_col = 0
+        for entry in visible:
+            w = (
+                len(entry["tree_prefix"])
+                + (2 if entry["is_current"] else 0)
+                + len(entry["description"] or "—")
+            )
+            desc_col = max(desc_col, w)
+
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, entry in enumerate(self._entries[self._scroll : self._scroll + height]):
+        for i, entry in enumerate(visible):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
             prefix = entry["tree_prefix"]
             desc = entry["description"] or "—"
-            status = entry["status"]
+            path = entry["path"]
             line = Text(no_wrap=True, overflow="ellipsis")
             if entry["is_current"]:
                 line.append(prefix, style="dim")
                 line.append("► ", style="bold cyan")
                 line.append(desc, style="bold")
+                used = len(prefix) + 2 + len(desc)
             else:
-                # Split prefix into spaces + connector (last 4 chars if descendant)
                 if len(prefix) >= 4 and prefix[-4] in "├└┌":
                     line.append(prefix[:-4], style="dim")
                     line.append(prefix[-4:], style="dim cyan")
                 else:
                     line.append(prefix, style="dim")
                 line.append(desc)
-            if status:
-                line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
+                used = len(prefix) + len(desc)
+            # Pad to align chips
+            gap = desc_col - used
+            if gap > 0:
+                line.append(" " * gap)
+            # Chips
+            data = self.store.get(path, {}) if path else entry.get("_entry_data", {})
+            _append_chips(line, data)
             if selected:
                 line.stylize("reverse")
             t.append_text(line)
@@ -424,7 +461,7 @@ class SubgraphPane(Widget, can_focus=True):
     def action_select_node(self) -> None:
         path = self.current_path()
         if path:
-            self.app._open_node(path)  # type: ignore[attr-defined]
+            self.app._open_node(path, keep_focus=self)  # type: ignore[attr-defined]
 
     def action_preview_node(self) -> None:
         path = self.current_path()
@@ -438,13 +475,16 @@ class SubgraphPane(Widget, can_focus=True):
         if not description:
             return
         from datetime import date
+
         path, data = self.store.new_node(description)
-        data.update({
-            "description": description,
-            "type": "task",
-            "status": "todo",
-            "start_date": date.today().isoformat(),
-        })
+        data.update(
+            {
+                "description": description,
+                "type": "task",
+                "status": "todo",
+                "start_date": date.today().isoformat(),
+            }
+        )
         self.store.save(path, data)
         self.app._open_node(path)  # type: ignore[attr-defined]
 
@@ -511,13 +551,17 @@ class HomePage(Widget, can_focus=True):
                 continue
             seen.add(path)
             data = self.store.get(path, {})
-            entries.append({
-                "path": path,
-                "indent": 0,
-                "description": str(data.get("description", "") or get_task_id(path)),
-                "status": str(data.get("status", "") or ""),
-                "type": str(data.get("type", "") or ""),
-            })
+            entries.append(
+                {
+                    "path": path,
+                    "indent": 0,
+                    "description": str(
+                        data.get("description", "") or get_task_id(path)
+                    ),
+                    "status": str(data.get("status", "") or ""),
+                    "type": str(data.get("type", "") or ""),
+                }
+            )
             for entry in get_how(data):
                 tid = (entry.get("target_node") or "").upper()
                 if tid:
@@ -525,21 +569,29 @@ class HomePage(Widget, can_focus=True):
                     if child_path and child_path not in seen:
                         seen.add(child_path)
                         cd = self.store.get(child_path, {})
-                        entries.append({
-                            "path": child_path,
-                            "indent": 1,
-                            "description": str(cd.get("description", "") or get_task_id(child_path)),
-                            "status": str(cd.get("status", "") or ""),
-                            "type": str(cd.get("type", "") or ""),
-                        })
+                        entries.append(
+                            {
+                                "path": child_path,
+                                "indent": 1,
+                                "description": str(
+                                    cd.get("description", "") or get_task_id(child_path)
+                                ),
+                                "status": str(cd.get("status", "") or ""),
+                                "type": str(cd.get("type", "") or ""),
+                            }
+                        )
                 elif is_inline(entry):
-                    entries.append({
-                        "path": None,
-                        "indent": 1,
-                        "description": str(entry.get("description", "") or "(inline)"),
-                        "status": str(entry.get("status", "") or ""),
-                        "type": str(entry.get("type", "") or ""),
-                    })
+                    entries.append(
+                        {
+                            "path": None,
+                            "indent": 1,
+                            "description": str(
+                                entry.get("description", "") or "(inline)"
+                            ),
+                            "status": str(entry.get("status", "") or ""),
+                            "type": str(entry.get("type", "") or ""),
+                        }
+                    )
 
         self._entries = entries
         self.cursor = max(0, min(self.cursor, len(entries) - 1))
@@ -571,7 +623,10 @@ class HomePage(Widget, can_focus=True):
             t.append_text(line)
             t.append("\n")
 
-        t.append(f" {len(self._entries)} node{'s' if len(self._entries) != 1 else ''}", style="dim")
+        t.append(
+            f" {len(self._entries)} node{'s' if len(self._entries) != 1 else ''}",
+            style="dim",
+        )
         return t
 
     def watch_cursor(self, _: int) -> None:
@@ -598,13 +653,16 @@ class HomePage(Widget, can_focus=True):
         if not description:
             return
         from datetime import date
+
         path, data = self.store.new_node(description)
-        data.update({
-            "description": description,
-            "type": "task",
-            "status": "todo",
-            "start_date": date.today().isoformat(),
-        })
+        data.update(
+            {
+                "description": description,
+                "type": "task",
+                "status": "todo",
+                "start_date": date.today().isoformat(),
+            }
+        )
         self.store.save(path, data)
         self.app._open_node(path)  # type: ignore[attr-defined]
 
@@ -1466,12 +1524,12 @@ Screen { layout: vertical; }
 #panes { height: 1fr; }
 
 #left-switcher {
-    width: 1fr;
+    width: 2fr;
     height: 1fr;
 }
 
 #right-switcher {
-    width: 2fr;
+    width: 1fr;
     height: 1fr;
 }
 
@@ -1627,8 +1685,13 @@ class PfqApp(App):
             else:
                 self.query_one("#subgraph", SubgraphPane).focus()
 
-    def _open_node(self, path: Path, push_history: bool = True) -> None:
-        """Switch to node state, center subgraph on path, open in task pane."""
+    def _open_node(
+        self, path: Path, push_history: bool = True, keep_focus: Widget | None = None
+    ) -> None:
+        """Switch to node state, center subgraph on path, open in task pane.
+
+        keep_focus: if set, focus returns to that widget instead of task pane.
+        """
         pane = self.query_one("#task-pane", TaskPane)
         if push_history and pane.path and pane.path != path:
             self._history.append(pane.path)
@@ -1651,8 +1714,11 @@ class PfqApp(App):
         # Cancel any pending link picker
         self._cancel_link()
 
-        # Focus task pane
-        pane.focus()
+        # Focus
+        if keep_focus is not None:
+            keep_focus.focus()
+        else:
+            pane.focus()
 
     def _preview_node(self, path: Path) -> None:
         """Load node in task pane read-only; left panel stays centered."""
@@ -1756,12 +1822,15 @@ class PfqApp(App):
         if not description:
             return
         from datetime import date
+
         path, data = self.store.new_node(description)
-        data.update({
-            "description": description,
-            "type": "task",
-            "status": "todo",
-            "start_date": date.today().isoformat(),
-        })
+        data.update(
+            {
+                "description": description,
+                "type": "task",
+                "status": "todo",
+                "start_date": date.today().isoformat(),
+            }
+        )
         self.store.save(path, data)
         self._apply_link(path)

@@ -137,49 +137,60 @@ Fields and valid statuses are defined in `config.py`.
 
 ## UI
 
-Terminal-based, three-column layout. All files are loaded into memory at startup.
+Terminal-based, two-column layout. All files are loaded into memory at startup.
 
-**Left column — file list:**
-- Browse and search all nodes, sorted by hierarchy (roots first, children indented)
-- Shows description, type, status
+**Left column — subgraph view / home page:**
 
-**Middle column — task view / link picker:**
-- Task view: parsed view of the open node, one line selected at a time
-- Link picker: file list for creating a link (activated with `l`), pre-sorted by relevance to the current link description
+At startup shows a home page: all root nodes (no parents) with one level of children.
 
-**Right column — context pane (read-only, auto-updated):**
-- Why subgraph: all ancestors reachable via `why` links (BFS, flattened)
-- Current node anchor
-- How subgraph: all descendants that declare `why → current` (BFS, flattened)
-- Statistics: node counts by status
+When a node is open, shows its local neighbourhood as a continuous tree:
 
-Indentation reflects depth, reduced for nodes cited multiple times. `×N` marks shared nodes.
+```
+        ┌── grandparent
+    ┌── parent
+► current node
+├── child 1
+│   └── grandchild 1.1
+└── child 2
+```
+
+Ancestors grow upward, furthest root at the most-indented top line. The current node sits at the leftmost position marked `►`. Descendants branch downward with standard tree connectors. Each line shows type, status, and date chips aligned in columns.
+
+**Right column — task view / link picker:**
+- Task view: structured view of the open node, one row selected at a time. Shows `why` (derived backlinks), `how` children, and `constrain` sections.
+- Link picker: node list for creating a link (activated with `l`), pre-sorted by word-overlap relevance.
 
 ### Keyboard shortcuts
 
-#### File list
+#### Global
+| Key | Action |
+|---|---|
+| `h` | Home page |
+| `b` | Go back (navigation history) |
+| `Tab` | Switch focus between left and right panel |
+| `q` | Quit |
+
+#### Left panel (subgraph / home)
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Navigate |
-| `Enter` | Open node |
+| `Enter` | Open node in right panel (focus stays left) |
+| `Space` | Preview node in right panel (read-only) |
 | `n` | New node |
 | `d` | Delete node |
-| `/` | Search / filter |
-| `Esc` | Clear search |
 
-#### Task view
+#### Right panel (task view)
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Navigate lines |
-| `e` | Edit current line |
+| `↑` / `↓` | Navigate rows |
+| `e` | Edit current row |
 | `Enter` | Confirm edit / follow link |
-| `Esc` | Cancel edit — or back to file list |
-| `n` | Insert new link below |
-| `d` | Delete selected line |
-| `a` | Add a missing field or link section |
-| `l` | Create a link on the selected line |
+| `Esc` | Cancel edit — or return focus to left panel |
+| `n` | Insert new row below |
+| `d` | Delete selected row |
+| `a` | Add a missing field or section |
+| `l` | Open link picker |
 | `u` | Remove link target (with confirmation) |
-| `b` | Go back (navigation history) |
 
 #### Link picker
 | Key | Action |
@@ -228,13 +239,14 @@ pfq new "my first goal"
 - File search, create, delete
 
 ### v0.3 — done
-- Unified `links` data model (no stored backlinks — derived at query time)
-- All files preloaded at startup
-- Three-column layout: file list | task view | context pane
-- Context pane: why/how subgraphs with BFS traversal and statistics
-- File list sorted by hierarchy (topological order, indented)
+- Unified `how`/`constrain` data model (backlinks derived at query time, never stored)
+- All files preloaded at startup via `Store` class
+- Two-column layout: subgraph view | task view / link picker
+- Left panel: inverted tree for ancestors, standard tree for descendants
+- Home page: root nodes + one level at startup
 - Link picker pre-sorted by word-overlap relevance
-- Backlinks shown in task view (derived, read-only)
+- Backlinks (`why`) shown in task view (derived, read-only)
+- Chip columns (type, status, date) aligned across all link rows
 
 ### Later
 - `horizon` field and timeline view (past month, past year)
