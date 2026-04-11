@@ -549,6 +549,19 @@ class SubgraphPane(Widget, can_focus=True):
 
         _dfs(path, "", cur_ts)
 
+        # Prepend a special "root" entry that navigates to the home page
+        entries.insert(0, {
+            "path": None,
+            "is_root_link": True,
+            "is_current": False,
+            "tree_prefix": "",
+            "description": "root",
+            "status": "",
+            "tl_start": None,
+            "tl_horizon": None,
+            "tl_due": None,
+        })
+
         self._entries = entries
         for i, e in enumerate(entries):
             if e["is_current"]:
@@ -560,6 +573,29 @@ class SubgraphPane(Widget, can_focus=True):
             return self._entries[self.cursor]["path"]
         return None
 
+    def _margin_label(self, abs_i: int) -> str:
+        """Return 4-char left margin label for entry at abs_i."""
+        if self._entries[abs_i].get("is_root_link"):
+            return "    "
+        cur = next((j for j, e in enumerate(self._entries) if e["is_current"]), 1)
+        n = len(self._entries)
+        desc_count = n - cur - 1
+        if abs_i == cur:
+            return " ▶  "
+        elif abs_i < cur:
+            # abs_i==0 is root_link; ancestors start at 1
+            anc_pos = abs_i - 1  # 0 = furthest ancestor
+            if anc_pos == 0:
+                return "why "
+            else:
+                return " │  "
+        else:
+            rel = abs_i - cur - 1  # 0 = first descendant
+            if desc_count == 0 or rel == desc_count - 1:
+                return "how "
+            else:
+                return " │  "
+
     def render(self) -> Text:
         height = max(self.size.height - 1, 3)
         if self.cursor < self._scroll:
@@ -569,12 +605,15 @@ class SubgraphPane(Widget, can_focus=True):
 
         visible = self._entries[self._scroll : self._scroll + height]
 
-        # Compute max (prefix + desc) width so timeline starts at a fixed column
+        _MARGIN_W = 4  # chars for "why ", " ^  ", " |> ", "how ", etc.
+
+        # Compute max (margin + prefix + desc) width so timeline starts at a fixed column
         desc_col = 0
-        for entry in visible:
+        for i, entry in enumerate(visible):
+            abs_i = i + self._scroll
             w = (
-                len(entry["tree_prefix"])
-                + (2 if entry["is_current"] else 0)
+                _MARGIN_W
+                + len(entry["tree_prefix"])
                 + len(entry["description"] or "—")
             )
             desc_col = max(desc_col, w)
@@ -587,14 +626,25 @@ class SubgraphPane(Widget, can_focus=True):
         for i, entry in enumerate(visible):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
+            margin = self._margin_label(abs_i)
             prefix = entry["tree_prefix"]
             desc = entry["description"] or "—"
             line = Text(no_wrap=True, overflow="ellipsis")
+            # Margin
             if entry["is_current"]:
+                line.append(margin, style="bold cyan")
+            elif entry.get("is_root_link"):
+                line.append(margin, style="")
+            else:
+                line.append(margin, style="dim cyan")
+            # Tree prefix + description
+            if entry.get("is_root_link"):
+                line.append(desc, style="dim")
+                used = _MARGIN_W + len(desc)
+            elif entry["is_current"]:
                 line.append(prefix, style="dim")
-                line.append("► ", style="bold cyan")
                 line.append(desc, style="bold")
-                used = len(prefix) + 2 + len(desc)
+                used = _MARGIN_W + len(prefix) + len(desc)
             else:
                 if len(prefix) >= 4 and prefix[-4] in "├└┌":
                     line.append(prefix[:-4], style="dim")
@@ -602,7 +652,7 @@ class SubgraphPane(Widget, can_focus=True):
                 else:
                     line.append(prefix, style="dim")
                 line.append(desc)
-                used = len(prefix) + len(desc)
+                used = _MARGIN_W + len(prefix) + len(desc)
             # Pad to align timeline
             gap = desc_col - used
             if gap > 0:
@@ -638,6 +688,9 @@ class SubgraphPane(Widget, can_focus=True):
             self.cursor += 1
 
     def action_select_node(self) -> None:
+        if 0 <= self.cursor < len(self._entries) and self._entries[self.cursor].get("is_root_link"):
+            self.app.action_go_home()  # type: ignore[attr-defined]
+            return
         path = self.current_path()
         if path:
             self.app._open_node(path, keep_focus=self)  # type: ignore[attr-defined]
