@@ -1259,16 +1259,14 @@ class TaskRowItem(ListItem):
             )
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
+            target_path = find_path_by_id(target, self._store) if target else None
             t.append("    • ")
             t.append(desc, style="" if desc else "dim")
             _pad(t, desc, self._link_desc_width)
-            if target:
-                target_path = find_path_by_id(target, self._store)
-                if target_path:
-                    _append_chips(t, self._store.get(target_path, {}))
-                t.append(f"  #{target}", style="color(8)")
-            else:
-                _append_chips(t, entry)
+            if target_path:
+                _append_chips(t, self._store.get(target_path, {}))
+            elif target:
+                t.append(f"  #{target}", style="bold red")
 
         elif kind == "why_header":
             t.append(" ── why ", style="bold magenta")
