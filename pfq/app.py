@@ -588,12 +588,32 @@ class SubgraphPane(Widget, can_focus=True):
             return
 
         entries: list[dict] = []
+        _MAX_DEPTH = 3
 
         # ── Ancestors: inverted tree, deepest (furthest) at top, most indented ──
         # depth = distance from current node (parent=1, grandparent=2, …)
         # indent = "    " * (depth - 1)  →  parent has 0 extra indent, root has most
         up_nodes = self.store.traverse(path, "up")
-        for node in sorted(up_nodes, key=lambda n: -n["depth"]):
+        visible_up = [n for n in up_nodes if n["depth"] <= _MAX_DEPTH]
+        cropped_up = any(n["depth"] > _MAX_DEPTH for n in up_nodes)
+
+        if cropped_up:
+            entries.append(
+                {
+                    "path": None,
+                    "is_cropped": True,
+                    "tree_prefix": "    " * _MAX_DEPTH + "┌── ",
+                    "is_current": False,
+                    "description": "…",
+                    "node_type": "",
+                    "status": "",
+                    "tl_start": None,
+                    "tl_horizon": None,
+                    "tl_due": None,
+                }
+            )
+
+        for node in sorted(visible_up, key=lambda n: -n["depth"]):
             ndata = self.store.get(node["path"], {})
             ts, th, td = _tl_data(ndata, None)
             entries.append(
@@ -640,7 +660,7 @@ class SubgraphPane(Widget, can_focus=True):
                         result.append(child)
             return result
 
-        def _dfs(p: Path, prefix: str, parent_start: str | None = None) -> None:
+        def _dfs(p: Path, prefix: str, depth: int = 1, parent_start: str | None = None) -> None:
             kids = _children(p)
             for i, child in enumerate(kids):
                 last = i == len(kids) - 1
@@ -664,9 +684,26 @@ class SubgraphPane(Widget, can_focus=True):
                         "tl_due": td,
                     }
                 )
-                _dfs(child, prefix + continuation, ts)
+                if depth < _MAX_DEPTH:
+                    _dfs(child, prefix + continuation, depth + 1, ts)
+                elif _children(child):
+                    # Cropped — show ellipsis placeholder
+                    entries.append(
+                        {
+                            "path": None,
+                            "is_cropped": True,
+                            "tree_prefix": prefix + continuation + "└── ",
+                            "is_current": False,
+                            "description": "…",
+                            "node_type": "",
+                            "status": "",
+                            "tl_start": None,
+                            "tl_horizon": None,
+                            "tl_due": None,
+                        }
+                    )
 
-        _dfs(path, "", cur_ts)
+        _dfs(path, "", 1, cur_ts)
 
         # Prepend a special "root" entry that navigates to the home page
         entries.insert(0, {
@@ -751,11 +788,12 @@ class SubgraphPane(Widget, can_focus=True):
             prefix = entry["tree_prefix"]
             desc = entry["description"] or "—"
             line = Text(no_wrap=True, overflow="ellipsis")
+            is_cropped = entry.get("is_cropped", False)
             # Margin
             if entry["is_current"]:
                 line.append(margin, style="bold cyan")
-            elif entry.get("is_root_link"):
-                line.append(margin, style="")
+            elif entry.get("is_root_link") or is_cropped:
+                line.append(margin, style="dim")
             else:
                 line.append(margin, style="dim cyan")
             # Tree prefix + description
@@ -763,9 +801,10 @@ class SubgraphPane(Widget, can_focus=True):
             status = entry.get("status", "")
             _, status_style = STATUSES.get(status, ("", "dim"))
             _, type_style = TYPES.get(node_type, ("", "dim"))
-            if entry.get("is_root_link"):
+            if entry.get("is_root_link") or is_cropped:
+                line.append(prefix, style="dim")
                 line.append(desc, style="dim")
-                used = _MARGIN_W + len(desc)
+                used = _MARGIN_W + len(prefix) + len(desc)
             elif entry["is_current"]:
                 line.append(prefix, style="dim")
                 line.append(desc, style=f"bold {status_style}" if status_style else "bold")
@@ -782,8 +821,8 @@ class SubgraphPane(Widget, can_focus=True):
             gap = desc_col - used
             if gap > 0:
                 line.append(" " * gap)
-            # Type chip (fixed width)
-            if not entry.get("is_root_link"):
+            # Type chip (fixed width) — skip for root/cropped
+            if not entry.get("is_root_link") and not is_cropped:
                 type_label = TYPES.get(node_type, (node_type, "dim"))[0] if node_type else ""
                 line.append(" " * _CHIP_GAP)
                 line.append(type_label.ljust(_TYPE_W), style=type_style if type_label else "")
@@ -797,7 +836,7 @@ class SubgraphPane(Widget, can_focus=True):
             # Timeline bar or axis
             if entry.get("is_root_link"):
                 _append_timeline_axis(line, tl_width)
-            else:
+            elif not is_cropped:
                 _append_timeline(line, entry, tl_width)
             if selected:
                 line.stylize("reverse" if self.has_focus else "dim")
@@ -819,12 +858,18 @@ class SubgraphPane(Widget, can_focus=True):
         self.refresh()
 
     def action_cursor_up(self) -> None:
-        if self.cursor > 0:
-            self.cursor -= 1
+        pos = self.cursor - 1
+        while pos > 0 and self._entries[pos].get("is_cropped"):
+            pos -= 1
+        if pos >= 0 and not self._entries[pos].get("is_cropped"):
+            self.cursor = pos
 
     def action_cursor_down(self) -> None:
-        if self.cursor < len(self._entries) - 1:
-            self.cursor += 1
+        pos = self.cursor + 1
+        while pos < len(self._entries) - 1 and self._entries[pos].get("is_cropped"):
+            pos += 1
+        if pos < len(self._entries) and not self._entries[pos].get("is_cropped"):
+            self.cursor = pos
 
     def action_select_node(self) -> None:
         if 0 <= self.cursor < len(self._entries) and self._entries[self.cursor].get("is_root_link"):

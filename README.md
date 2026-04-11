@@ -130,14 +130,16 @@ Terminal-based, two-column layout. All files are loaded into memory at startup.
 
 At startup shows a home page: all root nodes (no parents) with type, status, and date chips.
 
-When a node is open, shows its local neighbourhood with a left margin indicating direction:
+When a node is open, shows its local neighbourhood with a left margin indicating direction, capped at 3 levels in each direction:
 
 ```
      root
-why  ┌── grandparent         goal        active    ──────────┃────────────
+why  ┌── …                   ← ancestors beyond depth 3 (cropped)
+ │   ┌── grandparent         goal        active    ──────────┃────────────
  │   ┌── parent              project     todo      ──────────┃──▒▒▒▒▒▒▒▒▒
  ▶       current node        task        active    ──────────█████████████
  │   ├── child 1             task        doable    ──────────┃────────────
+ │   │   └── …               ← descendants beyond depth 3 (cropped)
  │   └── child 2             task        done      ──────────░░░░░░░░░────
 how  └── grandchild          task        todo      ──────────┃─▒▒▒▒▒▒▒▒▒▒
 ```
@@ -269,9 +271,9 @@ pfq new "my first goal"
 - Type and status chips in graph view, current node coloured by status
 - New statuses: `explore` (undefined/tinkering) and `doable` (low priority)
 - Loose date input: `5d`, `2w`, `1m ago`, etc.
+- Graph depth limit: capped at 3 levels for both ancestors and descendants, `…` shown on cropped branches
 
 ### Later
-- Graph depth limit (cap at 3-4 levels, show `…`)
 - Search / filter on home page
 - `conclusion` field for decision nodes
 - Computed stuck propagation — derive stuck status from structure
