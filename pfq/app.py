@@ -588,7 +588,7 @@ class SubgraphPane(Widget, can_focus=True):
             return
 
         entries: list[dict] = []
-        _MAX_DEPTH = 3
+        _MAX_DEPTH = 2
 
         # ── Ancestors: inverted tree, deepest (furthest) at top, most indented ──
         # depth = distance from current node (parent=1, grandparent=2, …)
@@ -602,7 +602,8 @@ class SubgraphPane(Widget, can_focus=True):
                 {
                     "path": None,
                     "is_cropped": True,
-                    "tree_prefix": "    " * _MAX_DEPTH + "┌── ",
+                    "is_ancestor": True,
+                    "tree_prefix": "    " * _MAX_DEPTH + "╭── ",
                     "is_current": False,
                     "description": "…",
                     "node_type": "",
@@ -619,8 +620,9 @@ class SubgraphPane(Widget, can_focus=True):
             entries.append(
                 {
                     "path": node["path"],
-                    "tree_prefix": "    " * (node["depth"] - 1) + "┌── ",
+                    "tree_prefix": "    " * (node["depth"] - 1) + "╭── ",
                     "is_current": False,
+                    "is_ancestor": True,
                     "description": node["description"],
                     "node_type": str(ndata.get("type", "") or ""),
                     "status": node["status"],
@@ -789,33 +791,34 @@ class SubgraphPane(Widget, can_focus=True):
             desc = entry["description"] or "—"
             line = Text(no_wrap=True, overflow="ellipsis")
             is_cropped = entry.get("is_cropped", False)
-            # Margin
+            is_ancestor = entry.get("is_ancestor", False)
+            # Margin — always dim, no color (infrastructure chrome)
             if entry["is_current"]:
                 line.append(margin, style="bold cyan")
-            elif entry.get("is_root_link") or is_cropped:
-                line.append(margin, style="dim")
             else:
-                line.append(margin, style="dim cyan")
+                line.append(margin, style="dim")
             # Tree prefix + description
             node_type = entry.get("node_type", "")
             status = entry.get("status", "")
             _, status_style = STATUSES.get(status, ("", "dim"))
-            _, type_style = TYPES.get(node_type, ("", "dim"))
+            _, type_style = TYPES.get(node_type, ("", ""))
             if entry.get("is_root_link") or is_cropped:
-                line.append(prefix, style="dim")
+                line.append(prefix, style="dim blue" if is_ancestor else "dim")
                 line.append(desc, style="dim")
                 used = _MARGIN_W + len(prefix) + len(desc)
             elif entry["is_current"]:
                 line.append(prefix, style="dim")
                 line.append(desc, style=f"bold {status_style}" if status_style else "bold")
                 used = _MARGIN_W + len(prefix) + len(desc)
+            elif is_ancestor:
+                # Ancestor: round-corner connector in blue, description styled by type
+                line.append(prefix, style="dim blue")
+                line.append(desc, style=type_style or "")
+                used = _MARGIN_W + len(prefix) + len(desc)
             else:
-                if len(prefix) >= 4 and prefix[-4] in "├└┌":
-                    line.append(prefix[:-4], style="dim")
-                    line.append(prefix[-4:], style="dim cyan")
-                else:
-                    line.append(prefix, style="dim")
-                line.append(desc)
+                # Descendant: dim connector, description styled by type
+                line.append(prefix, style="dim")
+                line.append(desc, style=type_style or "")
                 used = _MARGIN_W + len(prefix) + len(desc)
             # Pad desc to fixed column
             gap = desc_col - used
@@ -836,7 +839,14 @@ class SubgraphPane(Widget, can_focus=True):
             # Timeline bar or axis
             if entry.get("is_root_link"):
                 _append_timeline_axis(line, tl_width)
-            elif not is_cropped:
+            elif is_cropped:
+                # Just the now marker on an otherwise empty line
+                now_col = tl_width // 3
+                chars = [" "] * tl_width
+                if 0 <= now_col < tl_width:
+                    chars[now_col] = "│"
+                line.append("".join(chars), style="dim")
+            else:
                 _append_timeline(line, entry, tl_width)
             if selected:
                 line.stylize("reverse" if self.has_focus else "dim")
