@@ -30,7 +30,6 @@ from .model import (
     get_constrain,
     get_how,
     get_task_id,
-    is_inline,
     load_task,
 )
 
@@ -131,7 +130,7 @@ class ValuePickerModal(ModalScreen[Optional[str]]):
 @dataclass
 class Row:
     kind: str  # "simple" | "text" | "spacer"
-    # | "how_header" | "how_item" | "how_inline" | "how_add"
+    # | "how_header" | "how_item" | "how_add"
     # | "constrain_header" | "constrain_item" | "constrain_add"
     # | "why_header" | "why_item"
     field: str  # field name for simple/text; constrain type for constrain rows; "" otherwise
@@ -145,7 +144,6 @@ class Row:
             "simple",
             "text",
             "how_item",
-            "how_inline",
             "constrain_item",
         )
 
@@ -165,10 +163,7 @@ def build_rows(data: dict) -> list[Row]:
     if how:
         rows.append(Row("how_header", "", None))
         for i, entry in enumerate(how):
-            if is_inline(entry):
-                rows.append(Row("how_inline", "", i))
-            else:
-                rows.append(Row("how_item", "", i))
+            rows.append(Row("how_item", "", i))
         rows.append(Row("how_add", "", None))
 
     # constrain section — grouped by type
@@ -226,7 +221,7 @@ def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
     if row.kind in ("simple", "text"):
         return str(data.get(row.field) or "")
     _store = store or {}
-    if row.kind in ("how_item", "how_inline") and row.idx is not None:
+    if row.kind == "how_item" and row.idx is not None:
         how = get_how(data)
         if row.idx < len(how):
             return _resolve_entry_desc(how[row.idx], _store)
@@ -240,7 +235,7 @@ def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
 def set_row_text(row: Row, data: dict, value: str) -> None:
     if row.kind in ("simple", "text"):
         data[row.field] = value
-    elif row.kind in ("how_item", "how_inline") and row.idx is not None:
+    elif row.kind == "how_item" and row.idx is not None:
         how = get_how(data)
         if row.idx < len(how):
             how[row.idx]["description"] = value
@@ -517,61 +512,40 @@ class SubgraphPane(Widget, can_focus=True):
         # ── Descendants: DFS with normal tree connectors ───────────────────────
         visited: set[Path] = {path}
 
-        def _children(p: Path) -> list[dict]:
+        def _children(p: Path) -> list[Path]:
             result = []
             for e in get_how(self.store.get(p, {})):
-                if is_inline(e):
-                    result.append({"inline": True, "entry": e})
-                else:
-                    tid = (e.get("target_node") or "").upper()
-                    if tid:
-                        child = self.store.find(tid)
-                        if child and child not in visited:
-                            result.append({"inline": False, "path": child})
+                tid = (e.get("target_node") or "").upper()
+                if tid:
+                    child = self.store.find(tid)
+                    if child and child not in visited:
+                        result.append(child)
             return result
 
         def _dfs(p: Path, prefix: str, parent_start: str | None = None) -> None:
             kids = _children(p)
-            for i, kid in enumerate(kids):
+            for i, child in enumerate(kids):
                 last = i == len(kids) - 1
                 connector = "└── " if last else "├── "
                 continuation = "    " if last else "│   "
-                if kid["inline"]:
-                    e = kid["entry"]
-                    ts, th, td = _tl_data(e, parent_start)
-                    entries.append(
-                        {
-                            "path": None,
-                            "tree_prefix": prefix + connector,
-                            "is_current": False,
-                            "description": str(e.get("description", "") or "(inline)"),
-                            "status": str(e.get("status", "") or ""),
-                            "_entry_data": e,
-                            "tl_start": ts,
-                            "tl_horizon": th,
-                            "tl_due": td,
-                        }
-                    )
-                else:
-                    child = kid["path"]
-                    visited.add(child)
-                    cd = self.store.get(child, {})
-                    ts, th, td = _tl_data(cd, parent_start)
-                    entries.append(
-                        {
-                            "path": child,
-                            "tree_prefix": prefix + connector,
-                            "is_current": False,
-                            "description": str(
-                                cd.get("description", "") or get_task_id(child)
-                            ),
-                            "status": str(cd.get("status", "") or ""),
-                            "tl_start": ts,
-                            "tl_horizon": th,
-                            "tl_due": td,
-                        }
-                    )
-                    _dfs(child, prefix + continuation, ts)
+                visited.add(child)
+                cd = self.store.get(child, {})
+                ts, th, td = _tl_data(cd, parent_start)
+                entries.append(
+                    {
+                        "path": child,
+                        "tree_prefix": prefix + connector,
+                        "is_current": False,
+                        "description": str(
+                            cd.get("description", "") or get_task_id(child)
+                        ),
+                        "status": str(cd.get("status", "") or ""),
+                        "tl_start": ts,
+                        "tl_horizon": th,
+                        "tl_due": td,
+                    }
+                )
+                _dfs(child, prefix + continuation, ts)
 
         _dfs(path, "", cur_ts)
 
@@ -770,18 +744,6 @@ class HomePage(Widget, can_focus=True):
                                 "type": str(cd.get("type", "") or ""),
                             }
                         )
-                elif is_inline(entry):
-                    entries.append(
-                        {
-                            "path": None,
-                            "indent": 1,
-                            "description": str(
-                                entry.get("description", "") or "(inline)"
-                            ),
-                            "status": str(entry.get("status", "") or ""),
-                            "type": str(entry.get("type", "") or ""),
-                        }
-                    )
 
         self._entries = entries
         self.cursor = max(0, min(self.cursor, len(entries) - 1))
@@ -1050,7 +1012,7 @@ class TaskRowItem(ListItem):
         elif kind == "how_add":
             t.append("    +", style="dim")
 
-        elif kind in ("how_item", "how_inline"):
+        elif kind == "how_item":
             how = get_how(self._data)
             entry = (
                 how[self._row.idx]
@@ -1059,11 +1021,10 @@ class TaskRowItem(ListItem):
             )
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
-            own_desc = str(entry.get("description", "") or "")
             t.append("    • ")
-            t.append(desc, style="" if own_desc else "dim")
+            t.append(desc, style="" if desc else "dim")
             _pad(t, desc, self._link_desc_width)
-            if kind == "how_item" and target:
+            if target:
                 target_path = find_path_by_id(target, self._store)
                 if target_path:
                     _append_chips(t, self._store.get(target_path, {}))
@@ -1088,9 +1049,8 @@ class TaskRowItem(ListItem):
             )
             desc = _resolve_entry_desc(entry, self._store)
             target = str(entry.get("target_node", "") or "")
-            own_desc = str(entry.get("description", "") or "")
             t.append("    • ")
-            t.append(desc, style="" if own_desc else "dim")
+            t.append(desc, style="" if desc else "dim")
             _pad(t, desc, self._link_desc_width)
             if target:
                 target_path = find_path_by_id(target, self._store)
@@ -1307,7 +1267,7 @@ class TaskPane(Widget, can_focus=True):
         self._cursor_idx = new_cursor
 
         # Compute max description width for column alignment
-        _link_kinds = {"how_item", "how_inline", "constrain_item"}
+        _link_kinds = {"how_item", "constrain_item"}
         link_desc_width = 0
         for row in all_rows:
             if row.kind in _link_kinds:
@@ -1373,14 +1333,6 @@ class TaskPane(Widget, can_focus=True):
                 target_id = how[row.idx].get("target_node")
                 if target_id:
                     self.app.navigate_to_id(target_id)  # type: ignore[attr-defined]
-        elif row.kind == "how_inline" and row.idx is not None and self.path:
-            # Promote inline node to file node, then navigate
-            store = self.app.store
-            new_path = store.promote_inline(self.path, row.idx)
-            self.data = store[self.path]
-            self.rows = build_rows(self.data)
-            self._rebuild(keep_cursor=self._cursor_idx)
-            self.app.navigate_to_id(get_task_id(new_path))  # type: ignore[attr-defined]
         elif row.kind == "why_item" and row.backlink_path:
             self.app._open_node(row.backlink_path)  # type: ignore[attr-defined]
 
@@ -1402,7 +1354,7 @@ class TaskPane(Widget, can_focus=True):
             )
             return
         self._editing = True
-        if row.kind in ("how_item", "how_inline") and row.idx is not None:
+        if row.kind == "how_item" and row.idx is not None:
             how = get_how(self.data)
             edit_text = (
                 str(how[row.idx].get("description", "") or "")
@@ -1476,23 +1428,16 @@ class TaskPane(Widget, can_focus=True):
         if row is None or not self.path:
             return
 
-        if row.kind in ("how_header", "how_item", "how_inline", "how_add"):
-            how = self.data.setdefault("how", [])
-            if row.kind in ("how_item", "how_inline") and row.idx is not None:
-                insert_at = row.idx + 1
-            else:
-                insert_at = len(how)
-            how.insert(insert_at, {"description": ""})
-            self._save()
-            self.rows = build_rows(self.data)
-            cursor_pos = 0
-            for i, r in enumerate(self.rows):
-                if r.kind == "how_inline" and r.idx == insert_at:
-                    cursor_pos = i
-                    break
-            self._rebuild(keep_cursor=cursor_pos)
-            self._edit_is_new = True
-            self.action_edit()
+        if row.kind in ("how_header", "how_item", "how_add"):
+            insert_at = (
+                row.idx + 1
+                if row.kind == "how_item" and row.idx is not None
+                else len(self.data.get("how", []))
+            )
+            self.app.push_screen(  # type: ignore[attr-defined]
+                NewTaskModal(),
+                lambda desc, at=insert_at: self._on_new_how_node(desc, at),
+            )
 
         elif row.kind in ("constrain_header", "constrain_item", "constrain_add"):
             ct_name = row.field
@@ -1525,7 +1470,7 @@ class TaskPane(Widget, can_focus=True):
         if row is None or not self.path:
             return
 
-        if row.kind in ("how_item", "how_inline") and row.idx is not None:
+        if row.kind == "how_item" and row.idx is not None:
             how = get_how(self.data)
             if row.idx < len(how):
                 how.pop(row.idx)
@@ -1545,6 +1490,21 @@ class TaskPane(Widget, can_focus=True):
         self._save()
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
+
+    def _on_new_how_node(self, description: str | None, insert_at: int) -> None:
+        if not description or not self.path:
+            return
+        path = self.app._create_node(description)  # type: ignore[attr-defined]
+        how = self.data.setdefault("how", [])
+        how.insert(insert_at, {"target_node": get_task_id(path)})
+        self._save()
+        self.rows = build_rows(self.data)
+        cursor_pos = 0
+        for i, r in enumerate(self.rows):
+            if r.kind == "how_item" and r.idx == insert_at:
+                cursor_pos = i
+                break
+        self._rebuild(keep_cursor=cursor_pos)
 
     # ── Add field ─────────────────────────────────────────────────────────────
 
@@ -1572,18 +1532,11 @@ class TaskPane(Widget, can_focus=True):
         if not field or not self.path:
             return
         if field == "how":
-            how = self.data.setdefault("how", [])
-            how.append({"description": ""})
-            self._save()
-            self.rows = build_rows(self.data)
-            cursor_pos = 0
-            for i, r in enumerate(self.rows):
-                if r.kind == "how_inline" and r.idx == len(how) - 1:
-                    cursor_pos = i
-                    break
-            self._rebuild(keep_cursor=cursor_pos)
-            self._edit_is_new = True
-            self.action_edit()
+            insert_at = len(self.data.get("how", []))
+            self.app.push_screen(  # type: ignore[attr-defined]
+                NewTaskModal(),
+                lambda desc, at=insert_at: self._on_new_how_node(desc, at),
+            )
         elif field in CONSTRAIN_TYPE_MAP:
             constrain = self.data.setdefault("constrain", [])
             constrain.append({"type": field, "description": ""})
@@ -1626,8 +1579,8 @@ class TaskPane(Widget, can_focus=True):
         row = self.current_row()
         if row and row.kind in ("why_header", "why_item", "why_add"):
             self.app._start_linking_why()  # type: ignore[attr-defined]
-        elif row and row.kind in ("how_header", "how_item", "how_inline", "how_add"):
-            pending_idx = row.idx if row.kind in ("how_item", "how_inline") else -1
+        elif row and row.kind in ("how_header", "how_item", "how_add"):
+            pending_idx = row.idx if row.kind == "how_item" else -1
             self.app._start_linking("how", None, pending_idx)  # type: ignore[attr-defined]
         elif row and row.kind in (
             "constrain_header",

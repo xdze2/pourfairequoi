@@ -79,11 +79,6 @@ def get_constrain(data: dict) -> list[dict]:
     return []
 
 
-def is_inline(entry: dict) -> bool:
-    """True if this how entry is an in-file node (not a file node reference)."""
-    return "target_node" not in entry
-
-
 # ── Store ─────────────────────────────────────────────────────────────────────
 
 
@@ -221,7 +216,6 @@ class Store:
 
         Returns list of node dicts: path, data, description, status, depth,
         in_degree, display_indent.
-        Inline how entries are included in "down" at depth 1.
         """
         id_to_path: dict[str, Path] = {get_task_id(p): p for p in self._data}
 
@@ -273,18 +267,7 @@ class Store:
                     visited[neighbor] = current_depth + 1
                     queue.append((neighbor, current_depth + 1))
 
-        inline_nodes: list[dict] = []
-        if direction == "down":
-            for entry in get_how(self._data.get(start_path, {})):
-                if is_inline(entry):
-                    inline_nodes.append({
-                        "path": None, "data": entry,
-                        "description": str(entry.get("description", "") or ""),
-                        "status": str(entry.get("status", "") or ""),
-                        "depth": 1, "in_degree": 1, "display_indent": 1,
-                    })
-
-        result: list[dict] = list(inline_nodes)
+        result: list[dict] = []
         for path, depth in visited.items():
             deg = in_degree.get(path, 1)
             data = self._data.get(path, {})
@@ -319,36 +302,6 @@ class Store:
             union = len(query_words | task_words)
             scores[path] = overlap / union if union else 0.0
         return scores
-
-    def promote_inline(self, parent_path: Path, how_index: int) -> Path:
-        """Promote an inline how entry to a file node.
-
-        Replaces the inline dict in the parent with {"target_node": new_id},
-        saves both files, updates the store.
-        Returns the new file path.
-        """
-        parent_data = self._data[parent_path]
-        how = get_how(parent_data)
-        inline = how[how_index]
-
-        description = str(inline.get("description", "") or "untitled")
-        new_path = _new_filepath(description, parent_path.parent)
-
-        new_data: dict = {}
-        for key in ("type", "description", "status", "start_date", "due_date",
-                    "horizon", "notes", "conclusion"):
-            if key in inline:
-                new_data[key] = inline[key]
-        if "description" not in new_data:
-            new_data["description"] = description
-
-        save_task(new_path, new_data)
-        self._data[new_path] = new_data
-
-        how[how_index] = {"target_node": get_task_id(new_path)}
-        save_task(parent_path, parent_data)
-
-        return new_path
 
 
 # ── Migration utility ─────────────────────────────────────────────────────────
