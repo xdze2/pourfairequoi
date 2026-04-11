@@ -1096,7 +1096,7 @@ class TaskPane(Widget, can_focus=True):
             self._rebuild(keep_cursor=self._cursor_idx)
             self.app.navigate_to_id(get_task_id(new_path))  # type: ignore[attr-defined]
         elif row.kind == "why_item" and row.backlink_path:
-            self.app._open_file(row.backlink_path)  # type: ignore[attr-defined]
+            self.app._open_node(row.backlink_path)  # type: ignore[attr-defined]
 
     # ── Edit ──────────────────────────────────────────────────────────────────
 
