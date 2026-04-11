@@ -295,14 +295,14 @@ class SubgraphPane(Widget, can_focus=True):
 
         entries: list[dict] = []
 
-        # ── Ancestors: roots first, simple indent (no tree chars) ─────────────
+        # ── Ancestors: inverted tree, deepest (furthest) at top, most indented ──
+        # depth = distance from current node (parent=1, grandparent=2, …)
+        # indent = "    " * (depth - 1)  →  parent has 0 extra indent, root has most
         up_nodes = self.store.traverse(path, "up")
-        max_up = max((n["depth"] for n in up_nodes), default=0)
-
         for node in sorted(up_nodes, key=lambda n: -n["depth"]):
             entries.append({
                 "path": node["path"],
-                "tree_prefix": "  " * (max_up - node["depth"]),
+                "tree_prefix": "    " * (node["depth"] - 1) + "┌── ",
                 "is_current": False,
                 "description": node["description"],
                 "status": node["status"],
@@ -312,13 +312,13 @@ class SubgraphPane(Widget, can_focus=True):
         data = self.store.get(path, {})
         entries.append({
             "path": path,
-            "tree_prefix": "  " * max_up,
+            "tree_prefix": "",
             "is_current": True,
             "description": str(data.get("description", "") or get_task_id(path)),
             "status": str(data.get("status", "") or ""),
         })
 
-        # ── Descendants: DFS with tree connector chars ─────────────────────────
+        # ── Descendants: DFS with normal tree connectors ───────────────────────
         visited: set[Path] = {path}
 
         def _children(p: Path) -> list[dict]:
@@ -362,7 +362,7 @@ class SubgraphPane(Widget, can_focus=True):
                     })
                     _dfs(child, prefix + continuation)
 
-        _dfs(path, "  " * max_up)
+        _dfs(path, "")
 
         self._entries = entries
         for i, e in enumerate(entries):
@@ -396,7 +396,7 @@ class SubgraphPane(Widget, can_focus=True):
                 line.append(desc, style="bold")
             else:
                 # Split prefix into spaces + connector (last 4 chars if descendant)
-                if len(prefix) >= 4 and prefix[-4] in "├└":
+                if len(prefix) >= 4 and prefix[-4] in "├└┌":
                     line.append(prefix[:-4], style="dim")
                     line.append(prefix[-4:], style="dim cyan")
                 else:
