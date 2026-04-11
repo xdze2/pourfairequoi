@@ -611,12 +611,22 @@ class SubgraphPane(Widget, can_focus=True):
             # Timeline bar
             _append_timeline(line, entry, tl_width)
             if selected:
-                line.stylize("reverse")
+                line.stylize("reverse" if self.has_focus else "dim")
             t.append_text(line)
             t.append("\n")
         return t
 
     def watch_cursor(self, _: int) -> None:
+        self.refresh()
+
+    def on_focus(self) -> None:
+        for i, e in enumerate(self._entries):
+            if e.get("is_current"):
+                self.cursor = i
+                break
+        self.refresh()
+
+    def on_blur(self) -> None:
         self.refresh()
 
     def action_cursor_up(self) -> None:
@@ -771,7 +781,7 @@ class HomePage(Widget, can_focus=True):
             if status:
                 line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
             if selected:
-                line.stylize("reverse")
+                line.stylize("reverse" if self.has_focus else "dim")
             t.append_text(line)
             t.append("\n")
 
@@ -782,6 +792,12 @@ class HomePage(Widget, can_focus=True):
         return t
 
     def watch_cursor(self, _: int) -> None:
+        self.refresh()
+
+    def on_focus(self) -> None:
+        self.refresh()
+
+    def on_blur(self) -> None:
         self.refresh()
 
     def action_cursor_up(self) -> None:
@@ -902,7 +918,7 @@ class LinkPickerPane(Widget, can_focus=True):
                 if status:
                     line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
             if selected:
-                line.stylize("reverse")
+                line.stylize("reverse" if self.has_focus else "dim")
             t.append_text(line)
             t.append("\n")
 
@@ -969,6 +985,7 @@ class TaskRowItem(ListItem):
         self._data = data
         self._store = store or {}
         self._link_desc_width = link_desc_width
+        self._cursor_active: bool = False  # True = focused panel, use reverse
 
     def compose(self) -> ComposeResult:
         yield Label(self._make_renderable(), id="row-label")
@@ -982,6 +999,7 @@ class TaskRowItem(ListItem):
 
     def _make_renderable(self) -> Text:
         kind = self._row.kind
+        cursor_style = "reverse" if self._cursor_active else "dim"
 
         if kind == "spacer":
             return Text("")
@@ -996,7 +1014,7 @@ class TaskRowItem(ListItem):
             else:
                 t.append("   (empty)\n", style="dim")
             if self.selected:
-                t.stylize("reverse")
+                t.stylize(cursor_style)
             return t
 
         t = Text(no_wrap=True, overflow="ellipsis")
@@ -1076,7 +1094,7 @@ class TaskRowItem(ListItem):
             t.append("[link to a parent…]", style="dim")
 
         if self.selected:
-            t.stylize("reverse")
+            t.stylize(cursor_style)
         return t
 
     def refresh_label(self) -> None:
@@ -1107,29 +1125,6 @@ class TaskRowItem(ListItem):
             lbl.display = True
         except Exception:
             pass
-
-
-# ── Task header (title + metadata) ───────────────────────────────────────────
-
-
-class _TaskTitle(Static):
-    """Context bar: type + status."""
-
-    DEFAULT_CSS = "_TaskTitle { height: 2; }"
-
-    def update_task(self, data: dict) -> None:
-        task_type = str(data.get("type", "") or "")
-        status = str(data.get("status", "") or "")
-        t = Text(no_wrap=True, overflow="ellipsis")
-        t.append("  ")
-        if task_type:
-            t.append(task_type, style=TYPE_STYLES.get(task_type, "dim"))
-            t.append("  ")
-        if status:
-            t.append(status, style=STATUS_STYLES.get(status, "dim"))
-        else:
-            t.append("—", style="dim")
-        self.update(t)
 
 
 # ── Task pane ─────────────────────────────────────────────────────────────────
@@ -1168,19 +1163,28 @@ class TaskPane(Widget, can_focus=True):
         self._n_why_rows: int = 0
 
     def compose(self) -> ComposeResult:
-        yield _TaskTitle(id="task-title")
         yield _TaskList(id="task-list")
 
     def on_mount(self) -> None:
         if self.path:
-            self._refresh_title()
             self._rebuild()
 
-    def _refresh_title(self) -> None:
-        try:
-            self.query_one("#task-title", _TaskTitle).update_task(self.data)
-        except Exception:
-            pass
+    def on_focus(self) -> None:
+        old_idx = self._cursor_idx
+        self._cursor_idx = 0
+        if 0 <= old_idx < len(self._items) and old_idx != 0:
+            self._items[old_idx].selected = False
+        if self._items:
+            item = self._items[0]
+            item._cursor_active = True
+            item.selected = True
+            item.refresh_label()  # explicit: reactive may not fire if selected unchanged
+
+    def on_blur(self) -> None:
+        item = self._current_item()
+        if item:
+            item._cursor_active = False
+            item.refresh_label()
 
     def _lv(self) -> _TaskList:
         return self.query_one("#task-list", _TaskList)
@@ -1280,6 +1284,7 @@ class TaskPane(Widget, can_focus=True):
             item = TaskRowItem(
                 row, self.data, store=self.app.store, link_desc_width=link_desc_width
             )
+            item._cursor_active = self.has_focus
             item.selected = i == self._cursor_idx
             self._items.append(item)
             lv.append(item)
@@ -1289,8 +1294,10 @@ class TaskPane(Widget, can_focus=True):
             self._items[self._cursor_idx].selected = False
         self._cursor_idx = new_idx
         if 0 <= new_idx < len(self._items):
-            self._items[new_idx].selected = True
-            self._lv().scroll_to_widget(self._items[new_idx])
+            item = self._items[new_idx]
+            item._cursor_active = self.has_focus
+            item.selected = True
+            self._lv().scroll_to_widget(item)
 
     def current_row(self) -> Row | None:
         idx = self._cursor_idx
@@ -1380,8 +1387,6 @@ class TaskPane(Widget, can_focus=True):
         self._save()
         self.rows = build_rows(self.data)
         self._rebuild(keep_cursor=self._cursor_idx)
-        if row.field in ("type", "status"):
-            self._refresh_title()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if not self._editing:
@@ -1392,8 +1397,6 @@ class TaskPane(Widget, can_focus=True):
             set_row_text(row, self.data, event.value)
             self._save()
             item.end_edit()
-            if row.field == "description":
-                self._refresh_title()
         self._editing = False
         self._edit_original = ""
         self._edit_is_new = False
@@ -1654,7 +1657,6 @@ class TaskPane(Widget, can_focus=True):
         self.path = path
         self.data = data
         self.rows = build_rows(data)
-        self._refresh_title()
         self._rebuild()
 
     def begin_link(self, section: str, constrain_type: str | None, link_idx: int) -> None:
@@ -1745,12 +1747,6 @@ LinkPickerPane {
     border: solid $accent;
 }
 
-#task-title {
-    height: 1;
-    width: 1fr;
-    padding: 0 1;
-    background: $boost;
-}
 
 _TaskList {
     height: 1fr;
