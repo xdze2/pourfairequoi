@@ -12,7 +12,7 @@ import argparse
 from pathlib import Path
 
 from pfq.app import PfqApp
-from pfq.model import load_all_task, get_task_id
+from pfq.model import Store, get_how
 
 
 async def shot(app: PfqApp, pilot, name: str, out: Path) -> None:
@@ -24,24 +24,24 @@ async def shot(app: PfqApp, pilot, name: str, out: Path) -> None:
 
 async def run_screenshots(vault: Path, out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    store = load_all_task(vault)
+    store = Store(vault)
     paths = sorted(store.keys())
 
     app = PfqApp()
     async with app.run_test(size=(160, 40)) as pilot:
 
-        # Scene 1: file list (default view)
-        await shot(app, pilot, "01_file_list", out)
+        # Scene 1: home page (default view)
+        await shot(app, pilot, "01_home", out)
 
         # Scene 2: open first file
         if paths:
             await pilot.press("enter")
             await shot(app, pilot, "02_task_view", out)
 
-        # Scene 3: open a file with links (most links)
-        richest = max(paths, key=lambda p: len(store[p].get("links", [])), default=None)
+        # Scene 3: open a file with the most how children
+        richest = max(paths, key=lambda p: len(get_how(store[p])), default=None)
         if richest:
-            app._open_file(richest)
+            app._open_node(richest)
             await pilot.pause(0.1)
             await shot(app, pilot, "03_task_with_links", out)
 
@@ -51,13 +51,10 @@ async def run_screenshots(vault: Path, out: Path) -> None:
         await shot(app, pilot, "04_link_picker", out)
         await pilot.press("escape")
 
-        # Scene 5: search mode
-        await pilot.press("escape")  # back to file list
+        # Scene 5: home page again
+        await pilot.press("h")
         await pilot.pause(0.1)
-        await pilot.press("/")
-        await pilot.pause(0.05)
-        await shot(app, pilot, "05_search", out)
-        await pilot.press("escape")
+        await shot(app, pilot, "05_home_return", out)
 
 
 def main() -> None:

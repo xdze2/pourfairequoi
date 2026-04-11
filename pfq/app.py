@@ -214,7 +214,7 @@ def set_row_text(row: Row, data: dict, value: str) -> None:
 _SPACER = Row("spacer", "", None)
 
 
-# ── File nav pane ─────────────────────────────────────────────────────────────
+# ── Style maps ────────────────────────────────────────────────────────────────
 
 STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
 TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
@@ -261,115 +261,111 @@ class _AppHeader(Static):
     DEFAULT_CSS = "_AppHeader { height: 3; }"
 
 
-class FileNavPane(Widget, can_focus=True):
+class SubgraphPane(Widget, can_focus=True):
+    """Left panel in node state: ancestors → ► current → descendants."""
+
     BINDINGS = [
         Binding("up", "cursor_up", show=False),
         Binding("down", "cursor_down", show=False),
-        Binding("enter", "open_file", "Open", show=True),
+        Binding("enter", "select_node", "Select", show=True),
+        Binding("space", "preview_node", "Preview", show=False),
         Binding("n", "new_task", "New", show=True),
         Binding("d", "delete_task", "Delete", show=True),
     ]
 
     cursor: reactive[int] = reactive(0)
 
-    def __init__(self, vault: Path, store: dict[Path, dict], **kwargs):
+    def __init__(self, store, **kwargs):
         super().__init__(**kwargs)
-        self.vault = vault
         self.store = store
-        self._files: list[Path] = []
-        self._indent: dict[Path, int] = {}
-        self._searching = False
-        self._query = ""
+        self._center: Path | None = None
+        self._entries: list[dict] = []
         self._scroll = 0
 
-    def on_mount(self) -> None:
-        self._apply_filter()
-
-    def _apply_filter(self) -> None:
-        q = self._query.lower()
-        sorted_nodes = self.store.sort()
-        self._indent = {p: indent for p, indent in sorted_nodes}
-        if q:
-            self._files = [
-                p
-                for p, _ in sorted_nodes
-                if q in str(self.store[p].get("description", "") or p.stem).lower()
-                or q in p.stem.lower()
-            ]
-        else:
-            self._files = [p for p, _ in sorted_nodes]
-        self.cursor = max(0, min(self.cursor, len(self._files) - 1))
-        self._scroll = 0
+    def center_on(self, path: Path) -> None:
+        self._center = path
+        self._build_entries()
         self.refresh()
 
-    def on_key(self, event) -> None:
-        if self._searching:
-            if event.key == "escape":
-                self._searching = False
-                self._query = ""
-                self._apply_filter()
-                event.stop()
-            elif event.key == "backspace":
-                self._query = self._query[:-1]
-                self._apply_filter()
-                event.stop()
-            elif event.key == "enter":
-                self._searching = False
-                self.refresh()
-                event.stop()
-            elif event.character and event.character.isprintable():
-                self._query += event.character
-                self._apply_filter()
-                event.stop()
-        else:
-            if event.character == "/":
-                self._searching = True
-                self._query = ""
-                self.refresh()
-                event.stop()
-            elif event.key == "escape":
-                try:
-                    self.app.query_one("#task-pane", TaskPane).focus()
-                except Exception:
-                    pass
-                event.stop()
+    def _build_entries(self) -> None:
+        path = self._center
+        if not path:
+            self._entries = []
+            return
+
+        up_nodes = self.store.traverse(path, "up")
+        down_nodes = self.store.traverse(path, "down")
+
+        max_up = max((n["depth"] for n in up_nodes), default=0)
+        up_sorted = sorted(up_nodes, key=lambda n: -n["depth"])
+
+        entries: list[dict] = []
+        for node in up_sorted:
+            entries.append({
+                "path": node["path"],
+                "indent": max_up - node["depth"],
+                "is_current": False,
+                "description": node["description"],
+                "status": node["status"],
+            })
+
+        data = self.store.get(path, {})
+        entries.append({
+            "path": path,
+            "indent": max_up,
+            "is_current": True,
+            "description": str(data.get("description", "") or get_task_id(path)),
+            "status": str(data.get("status", "") or ""),
+        })
+
+        down_sorted = sorted(down_nodes, key=lambda n: (n["display_indent"], n["depth"]))
+        for node in down_sorted:
+            entries.append({
+                "path": node["path"],
+                "indent": max_up + node["display_indent"],
+                "is_current": False,
+                "description": node["description"],
+                "status": node["status"],
+            })
+
+        self._entries = entries
+        for i, e in enumerate(entries):
+            if e["is_current"]:
+                self.cursor = i
+                break
+
+    def current_path(self) -> Path | None:
+        if 0 <= self.cursor < len(self._entries):
+            return self._entries[self.cursor]["path"]
+        return None
 
     def render(self) -> Text:
         height = max(self.size.height - 1, 3)
         if self.cursor < self._scroll:
             self._scroll = self.cursor
-        elif self._files and self.cursor >= self._scroll + height:
+        elif self._entries and self.cursor >= self._scroll + height:
             self._scroll = self.cursor - height + 1
 
         t = Text(no_wrap=True, overflow="ellipsis")
-        for i, path in enumerate(self._files[self._scroll : self._scroll + height]):
+        for i, entry in enumerate(self._entries[self._scroll : self._scroll + height]):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
-            data = self.store.get(path, {})
-            desc = str(data.get("description", "") or path.stem)
-            status = str(data.get("status", "") or "")
-            task_type = str(data.get("type", "") or "")
-            indent = self._indent.get(path, 0)
+            indent = "  " * entry["indent"]
+            marker = "► " if entry["is_current"] else "  "
+            desc = entry["description"] or "—"
+            status = entry["status"]
             line = Text(no_wrap=True, overflow="ellipsis")
-            line.append("  " * indent + " ")
-            line.append(desc)
-            if task_type:
-                line.append(f" {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
+            style = "bold" if entry["is_current"] else ""
+            line.append(f"{indent}{marker}{desc}", style=style)
             if status:
-                line.append(f" {status}", style=STATUS_STYLES.get(status, "dim"))
+                line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
             if selected:
                 line.stylize("reverse")
             t.append_text(line)
             t.append("\n")
-
-        if self._searching:
-            t.append(f" /{self._query}▋", style="bold yellow")
-        else:
-            n = len(self._files)
-            t.append(f" {n} file{'s' if n != 1 else ''}  / to search", style="dim")
         return t
 
-    def watch_cursor(self, _value: int) -> None:
+    def watch_cursor(self, _: int) -> None:
         self.refresh()
 
     def action_cursor_up(self) -> None:
@@ -377,17 +373,18 @@ class FileNavPane(Widget, can_focus=True):
             self.cursor -= 1
 
     def action_cursor_down(self) -> None:
-        if self.cursor < len(self._files) - 1:
+        if self.cursor < len(self._entries) - 1:
             self.cursor += 1
 
-    def action_open_file(self) -> None:
-        if 0 <= self.cursor < len(self._files):
-            self.app._open_in_task_pane(self._files[self.cursor])  # type: ignore[attr-defined]
+    def action_select_node(self) -> None:
+        path = self.current_path()
+        if path:
+            self.app._open_node(path)  # type: ignore[attr-defined]
 
-    def current_path(self) -> Path | None:
-        if 0 <= self.cursor < len(self._files):
-            return self._files[self.cursor]
-        return None
+    def action_preview_node(self) -> None:
+        path = self.current_path()
+        if path:
+            self.app._preview_node(path)  # type: ignore[attr-defined]
 
     def action_new_task(self) -> None:
         self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
@@ -396,7 +393,6 @@ class FileNavPane(Widget, can_focus=True):
         if not description:
             return
         from datetime import date
-
         path, data = self.store.new_node(description)
         data.update({
             "description": description,
@@ -405,8 +401,7 @@ class FileNavPane(Widget, can_focus=True):
             "start_date": date.today().isoformat(),
         })
         self.store.save(path, data)
-        self.notify_file_added(path, data)
-        self.app._open_in_task_pane(path)  # type: ignore[attr-defined]
+        self.app._open_node(path)  # type: ignore[attr-defined]
 
     def action_delete_task(self) -> None:
         path = self.current_path()
@@ -422,19 +417,151 @@ class FileNavPane(Widget, can_focus=True):
         if not ok:
             return
         self.store.remove(path)
-        self._apply_filter()
-        pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
-        if pane.path == path:
-            pane.path = None
-            pane.data = {}
-            pane.rows = []
-            pane._rebuild()
+        if path == self._center:
+            self.app.action_go_home()  # type: ignore[attr-defined]
+        else:
+            self._build_entries()
+            self.refresh()
 
-    def notify_file_added(self, path: Path, data: dict) -> None:
-        self.store[path] = data
-        self._apply_filter()
-        if path in self._files:
-            self.cursor = self._files.index(path)
+
+class HomePage(Widget, can_focus=True):
+    """Startup view: root nodes + one level of children."""
+
+    BINDINGS = [
+        Binding("up", "cursor_up", show=False),
+        Binding("down", "cursor_down", show=False),
+        Binding("enter", "open_node", "Open", show=True),
+        Binding("n", "new_task", "New", show=True),
+    ]
+
+    cursor: reactive[int] = reactive(0)
+
+    def __init__(self, store, **kwargs):
+        super().__init__(**kwargs)
+        self.store = store
+        self._entries: list[dict] = []
+        self._scroll = 0
+
+    def on_mount(self) -> None:
+        self.refresh_entries()
+
+    def refresh_entries(self) -> None:
+        has_parent: set[Path] = set()
+        for data in self.store._data.values():
+            for entry in get_how(data):
+                tid = (entry.get("target_node") or "").upper()
+                if tid:
+                    tp = self.store.find(tid)
+                    if tp:
+                        has_parent.add(tp)
+
+        sorted_nodes = self.store.sort()
+        entries: list[dict] = []
+        seen: set[Path] = set()
+
+        for path, _ in sorted_nodes:
+            if path in has_parent:
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            data = self.store.get(path, {})
+            entries.append({
+                "path": path,
+                "indent": 0,
+                "description": str(data.get("description", "") or get_task_id(path)),
+                "status": str(data.get("status", "") or ""),
+                "type": str(data.get("type", "") or ""),
+            })
+            for entry in get_how(data):
+                tid = (entry.get("target_node") or "").upper()
+                if tid:
+                    child_path = self.store.find(tid)
+                    if child_path and child_path not in seen:
+                        seen.add(child_path)
+                        cd = self.store.get(child_path, {})
+                        entries.append({
+                            "path": child_path,
+                            "indent": 1,
+                            "description": str(cd.get("description", "") or get_task_id(child_path)),
+                            "status": str(cd.get("status", "") or ""),
+                            "type": str(cd.get("type", "") or ""),
+                        })
+                elif is_inline(entry):
+                    entries.append({
+                        "path": None,
+                        "indent": 1,
+                        "description": str(entry.get("description", "") or "(inline)"),
+                        "status": str(entry.get("status", "") or ""),
+                        "type": str(entry.get("type", "") or ""),
+                    })
+
+        self._entries = entries
+        self.cursor = max(0, min(self.cursor, len(entries) - 1))
+        self.refresh()
+
+    def render(self) -> Text:
+        height = max(self.size.height - 1, 3)
+        if self.cursor < self._scroll:
+            self._scroll = self.cursor
+        elif self._entries and self.cursor >= self._scroll + height:
+            self._scroll = self.cursor - height + 1
+
+        t = Text(no_wrap=True, overflow="ellipsis")
+        for i, entry in enumerate(self._entries[self._scroll : self._scroll + height]):
+            abs_i = i + self._scroll
+            selected = abs_i == self.cursor
+            indent = "  " * entry["indent"]
+            desc = entry["description"] or "—"
+            status = entry["status"]
+            task_type = entry["type"]
+            line = Text(no_wrap=True, overflow="ellipsis")
+            line.append(f"{indent} {desc}")
+            if task_type:
+                line.append(f"  {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
+            if status:
+                line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
+            if selected:
+                line.stylize("reverse")
+            t.append_text(line)
+            t.append("\n")
+
+        t.append(f" {len(self._entries)} node{'s' if len(self._entries) != 1 else ''}", style="dim")
+        return t
+
+    def watch_cursor(self, _: int) -> None:
+        self.refresh()
+
+    def action_cursor_up(self) -> None:
+        if self.cursor > 0:
+            self.cursor -= 1
+
+    def action_cursor_down(self) -> None:
+        if self.cursor < len(self._entries) - 1:
+            self.cursor += 1
+
+    def action_open_node(self) -> None:
+        if 0 <= self.cursor < len(self._entries):
+            path = self._entries[self.cursor]["path"]
+            if path:
+                self.app._open_node(path)  # type: ignore[attr-defined]
+
+    def action_new_task(self) -> None:
+        self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
+
+    def _on_new_task(self, description: str | None) -> None:
+        if not description:
+            return
+        from datetime import date
+        path, data = self.store.new_node(description)
+        data.update({
+            "description": description,
+            "type": "task",
+            "status": "todo",
+            "start_date": date.today().isoformat(),
+        })
+        self.store.save(path, data)
+        self.app._open_node(path)  # type: ignore[attr-defined]
 
 
 # ── Link picker pane ──────────────────────────────────────────────────────────
@@ -964,9 +1091,6 @@ class TaskPane(Widget, can_focus=True):
             # Promote inline node to file node, then navigate
             store = self.app.store
             new_path = store.promote_inline(self.path, row.idx)
-            self.app.query_one("#file-nav", FileNavPane).notify_file_added(  # type: ignore[attr-defined]
-                new_path, store[new_path]
-            )
             self.data = store[self.path]
             self.rows = build_rows(self.data)
             self._rebuild(keep_cursor=self._cursor_idx)
@@ -1186,7 +1310,10 @@ class TaskPane(Widget, can_focus=True):
 
     def action_back_to_nav(self) -> None:
         if not self._editing:
-            self.app._show_file_nav()  # type: ignore[attr-defined]
+            try:
+                self.app.query_one("#subgraph", SubgraphPane).focus()  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def action_link(self) -> None:
         """Open link picker for the current section."""
@@ -1256,113 +1383,6 @@ class TaskPane(Widget, can_focus=True):
         self._rebuild(keep_cursor=self._cursor_idx)
 
 
-# ── Context pane ──────────────────────────────────────────────────────────────
-
-STATUS_SYMBOLS: dict[str, str] = {
-    "todo": "·",
-    "active": "▶",
-    "stuck": "!",
-    "done": "✓",
-    "discarded": "×",
-}
-
-
-class ContextPane(Widget):
-    """Read-only right panel showing the local why/how subgraph."""
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._path: Path | None = None
-        self._store: dict[Path, dict] = {}
-
-    def compose(self) -> ComposeResult:
-        yield Static("", id="context-content")
-
-    def update_context(self, path: Path | None, store: dict[Path, dict]) -> None:
-        self._path = path
-        self._store = store
-        self._rebuild()
-
-    def _rebuild(self) -> None:
-        try:
-            widget = self.query_one("#context-content", Static)
-        except Exception:
-            return
-        if not self._path:
-            widget.update("")
-            return
-
-        data = self._store.get(self._path, {})
-        desc = str(data.get("description", "") or "")
-        status = str(data.get("status", "") or "")
-        node_type = str(data.get("type", "") or "")
-
-        why_nodes = self._store.traverse(self._path, "up")
-        how_nodes = self._store.traverse(self._path, "down")
-
-        t = Text(overflow="fold")
-
-        # ── why subgraph ──────────────────────────────────────────────────────
-        t.append("── why ", style="bold cyan")
-        t.append("─" * 20 + "\n", style="dim")
-        if why_nodes:
-            for node in why_nodes:
-                self._append_node(t, node)
-        else:
-            t.append("  (none)\n", style="dim")
-
-        # ── current node ──────────────────────────────────────────────────────
-        t.append("\n")
-        sym = STATUS_SYMBOLS.get(status, "·")
-        t.append(f" {sym} ", style=STATUS_STYLES.get(status, "dim"))
-        t.append(desc or "—", style="bold")
-        if node_type:
-            t.append(f"  {node_type}", style=TYPE_STYLES.get(node_type, "dim"))
-        t.append("\n\n")
-
-        # ── how subgraph ──────────────────────────────────────────────────────
-        t.append("── how ", style="bold cyan")
-        t.append("─" * 20 + "\n", style="dim")
-        if how_nodes:
-            for node in how_nodes:
-                self._append_node(t, node)
-        else:
-            t.append("  (none)\n", style="dim")
-
-        # ── statistics ───────────────────────────────────────────────────────
-        all_nodes = why_nodes + how_nodes
-        if all_nodes:
-            counts: dict[str, int] = {}
-            for node in all_nodes:
-                s = node["status"] or "?"
-                counts[s] = counts.get(s, 0) + 1
-            t.append("\n")
-            t.append("─" * 27 + "\n", style="dim")
-            total = len(all_nodes)
-            t.append(f" {total} node{'s' if total != 1 else ''}  ", style="dim")
-            parts = []
-            for s, sym in STATUS_SYMBOLS.items():
-                if s in counts:
-                    parts.append((f"{sym}{counts[s]}", STATUS_STYLES.get(s, "dim")))
-            for i, (part_text, part_style) in enumerate(parts):
-                if i:
-                    t.append("  ")
-                t.append(part_text, style=part_style)
-            t.append("\n")
-
-        widget.update(t)
-
-    def _append_node(self, t: Text, node: dict) -> None:
-        indent = "  " * node["display_indent"]
-        sym = STATUS_SYMBOLS.get(node["status"], " ") if node["status"] else " "
-        style = STATUS_STYLES.get(node["status"], "dim") if node["status"] else "dim"
-        t.append(f"{indent}{sym} ", style=style)
-        t.append(node["description"] or "—")
-        if node["in_degree"] > 1:
-            t.append(f"  ×{node['in_degree']}", style="dim")
-        t.append("\n")
-
-
 # ── Add-section modal ─────────────────────────────────────────────────────────
 
 
@@ -1400,30 +1420,13 @@ Screen { layout: vertical; }
 
 #panes { height: 1fr; }
 
-#left-col {
+#left-switcher {
     width: 1fr;
-    height: 1fr;
-}
-
-#mid-col {
-    width: 2fr;
     height: 1fr;
 }
 
 #right-switcher {
     width: 2fr;
-    height: 1fr;
-}
-
-ContextPane {
-    width: 1fr;
-    height: 1fr;
-    border: solid $surface-lighten-2;
-    padding: 0 1;
-    layout: vertical;
-}
-
-ContextPane > Static {
     height: 1fr;
 }
 
@@ -1437,7 +1440,7 @@ _AppHeader {
     content-align: left middle;
 }
 
-FileNavPane, TaskPane, LinkPickerPane {
+SubgraphPane, HomePage, TaskPane, LinkPickerPane {
     width: 1fr;
     height: 1fr;
     border: solid $surface-lighten-2;
@@ -1445,7 +1448,7 @@ FileNavPane, TaskPane, LinkPickerPane {
     layout: vertical;
 }
 
-FileNavPane:focus, TaskPane:focus, LinkPickerPane:focus {
+SubgraphPane:focus, HomePage:focus, TaskPane:focus, LinkPickerPane:focus {
     border: solid $primary;
 }
 
@@ -1459,7 +1462,6 @@ LinkPickerPane {
     padding: 0 1;
     background: $boost;
 }
-
 
 _TaskList {
     height: 1fr;
@@ -1506,7 +1508,9 @@ class PfqApp(App):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
+        Binding("h", "go_home", "Home", show=True),
         Binding("b", "go_back", "Back", show=True),
+        Binding("tab", "switch_focus", "Switch", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -1520,39 +1524,106 @@ class PfqApp(App):
     def compose(self) -> ComposeResult:
         vault = self._initial_path.parent if self._initial_path else Path("data")
         yield Horizontal(
-            Vertical(
-                _AppHeader("POURFAIREQUOI", id="app-header"),
-                FileNavPane(vault, self.store, id="file-nav"),
-                id="left-col",
+            ContentSwitcher(
+                HomePage(self.store, id="home-page"),
+                SubgraphPane(self.store, id="subgraph"),
+                initial="home-page",
+                id="left-switcher",
             ),
-            Vertical(
-                ContentSwitcher(
-                    TaskPane(self._initial_path, id="task-pane"),
-                    LinkPickerPane(vault, self.store, id="link-picker"),
-                    initial="task-pane",
-                    id="right-switcher",
-                ),
-                id="mid-col",
+            ContentSwitcher(
+                TaskPane(self._initial_path, id="task-pane"),
+                LinkPickerPane(vault, self.store, id="link-picker"),
+                initial="task-pane",
+                id="right-switcher",
             ),
-            ContextPane(id="context-pane"),
             id="panes",
         )
         yield Footer()
 
     def on_mount(self) -> None:
         if self._initial_path:
-            self.query_one("#task-pane", TaskPane).focus()
+            self._open_node(self._initial_path)
         else:
-            self.query_one("#file-nav", FileNavPane).focus()
+            self.query_one("#home-page", HomePage).focus()
 
-    # ── Panel switching ───────────────────────────────────────────────────────
+    # ── Navigation ────────────────────────────────────────────────────────────
 
-    def _show_file_nav(self) -> None:
+    def action_go_home(self) -> None:
         self._cancel_link()
-        self.query_one("#file-nav", FileNavPane).focus()
+        left = self.query_one("#left-switcher", ContentSwitcher)
+        left.current = "home-page"
+        home = self.query_one("#home-page", HomePage)
+        home.refresh_entries()
+        home.focus()
 
-    def _show_task_pane(self) -> None:
-        self.query_one("#task-pane", TaskPane).focus()
+    def action_go_back(self) -> None:
+        if self._history:
+            path = self._history.pop()
+            self._open_node(path, push_history=False)
+
+    def action_switch_focus(self) -> None:
+        left = self.query_one("#left-switcher", ContentSwitcher)
+        right = self.query_one("#right-switcher", ContentSwitcher)
+        # Determine which side is currently focused
+        focused = self.focused
+        left_ids = {"home-page", "subgraph"}
+        right_ids = {"task-pane", "link-picker"}
+        fid = focused.id if focused else None
+        if fid in left_ids:
+            # Move to right
+            if right.current == "task-pane":
+                self.query_one("#task-pane", TaskPane).focus()
+            else:
+                self.query_one("#link-picker", LinkPickerPane).focus()
+        else:
+            # Move to left
+            if left.current == "home-page":
+                self.query_one("#home-page", HomePage).focus()
+            else:
+                self.query_one("#subgraph", SubgraphPane).focus()
+
+    def _open_node(self, path: Path, push_history: bool = True) -> None:
+        """Switch to node state, center subgraph on path, open in task pane."""
+        pane = self.query_one("#task-pane", TaskPane)
+        if push_history and pane.path and pane.path != path:
+            self._history.append(pane.path)
+
+        # Update task pane
+        data = self.store.get(path) or load_task(path)
+        self.store[path] = data
+        pane.path = path
+        pane.data = data
+        pane.rows = build_rows(data)
+        pane._refresh_title()
+        pane._rebuild()
+
+        # Switch left to subgraph, center on path
+        left = self.query_one("#left-switcher", ContentSwitcher)
+        left.current = "subgraph"
+        subgraph = self.query_one("#subgraph", SubgraphPane)
+        subgraph.center_on(path)
+
+        # Cancel any pending link picker
+        self._cancel_link()
+
+        # Focus task pane
+        pane.focus()
+
+    def _preview_node(self, path: Path) -> None:
+        """Load node in task pane read-only; left panel stays centered."""
+        data = self.store.get(path) or {}
+        pane = self.query_one("#task-pane", TaskPane)
+        pane.path = path
+        pane.data = data
+        pane.rows = build_rows(data)
+        pane._refresh_title()
+        pane._rebuild()
+        # Do NOT focus task pane — left panel keeps focus
+
+    def navigate_to_id(self, link_id: str) -> None:
+        target = self.store.find(link_id)
+        if target:
+            self._open_node(target)
 
     # ── Linking ───────────────────────────────────────────────────────────────
 
@@ -1563,7 +1634,6 @@ class PfqApp(App):
         pane._link_pending_section = section
         pane._link_pending_type = constrain_type
         pane._link_pending_idx = link_idx
-        # Score tasks by word overlap with pending link description
         query = ""
         if link_idx >= 0:
             if section == "how":
@@ -1614,7 +1684,6 @@ class PfqApp(App):
         pane._link_pending_type = None
         pane._link_pending_idx = -1
         self._cancel_link()
-        self._refresh_context()
 
     def _cancel_link(self) -> None:
         right = self.query_one("#right-switcher", ContentSwitcher)
@@ -1642,7 +1711,6 @@ class PfqApp(App):
         if not description:
             return
         from datetime import date
-
         path, data = self.store.new_node(description)
         data.update({
             "description": description,
@@ -1651,44 +1719,4 @@ class PfqApp(App):
             "start_date": date.today().isoformat(),
         })
         self.store.save(path, data)
-        self.query_one("#file-nav", FileNavPane).notify_file_added(path, data)
         self._apply_link(path)
-
-    # ── File navigation ───────────────────────────────────────────────────────
-
-    def _open_in_task_pane(self, path: Path) -> None:
-        self._open_file(path)
-        self._show_task_pane()
-
-    def navigate_to_id(self, link_id: str) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        if not pane.path:
-            return
-        target = self.store.find(link_id)
-        if target:
-            self._history.append(pane.path)
-            self._open_file(target)
-
-    def action_go_back(self) -> None:
-        if self._history:
-            self._open_file(self._history.pop())
-
-    def _refresh_context(self) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        self.query_one("#context-pane", ContextPane).update_context(
-            pane.path, self.store
-        )
-
-    def _open_file(self, path: Path) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        pane.path = path
-        data = self.store.get(path) or {}
-        self.store[path] = data
-        pane.data = data
-        pane.rows = build_rows(pane.data)
-        pane._refresh_title()
-        pane._rebuild()
-        nav = self.query_one("#file-nav", FileNavPane)
-        if path in nav._files:
-            nav.cursor = nav._files.index(path)
-        self._refresh_context()

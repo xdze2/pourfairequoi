@@ -1,0 +1,232 @@
+Build a terminal-based hierarchical reasoning tool called "pfq" (PourFaireQuoi).
+It is a personal task manager focused on *why* and *how*, not just *what* and *when*.
+
+━━━ CONCEPT ━━━
+
+Nodes form a DAG (directed acyclic graph). Each node is a unit of thought:
+goal, project, task, event, decision, milestone, or constraint.
+
+Links are directional:
+- Vertical: "how" (parent declares its children). "Why" is always derived
+  by scanning the graph — never stored.
+- Lateral: "constrain" (but, alternative_to) — annotations that do not
+  affect the DAG structure.
+
+Design principles:
+- Local YAML files for privacy and git-friendliness
+- No required fields — capture first, refine later
+- All nodes loaded into memory at startup to allow full-graph reasoning
+  (backlink derivation, topological sort, BFS traversal)
+- Terminal UI only (Textual framework)
+
+
+━━━ DATA FORMAT ━━━
+
+Each file node is a YAML file: `data/AB12CD_readable_slug.yaml`
+The 6-character random ID (uppercase alphanumeric) is the node's stable identity.
+
+Fields:
+  description   str         short title
+  type          str         goal | project | task | event | decision | milestone | constraint
+  status        str         todo | active | stuck | done | discarded
+  horizon       str         day | week | month | year | vision
+  start_date    str         ISO date
+  due_date      str         ISO date
+  notes         text        free-form working notes
+  conclusion    text        for decision nodes: what was decided and why
+  last_modified str         auto-stamped on every save (ISO date)
+
+  how:                      list of children (declared by the parent)
+    - target_node: AB12CD   file node reference (link to another YAML file)
+    - description: Buy case # OR inline node — no separate file
+      type: event
+      status: done
+
+  constrain:                lateral annotations
+    - type: but
+      description: budget <300 euros
+    - type: alternative_to
+      target_node: XYZ123
+
+Inline nodes live inside a parent's how: list. They can be promoted to file
+nodes automatically when navigated into.
+
+"Why" is never stored. It is derived at query time by scanning which nodes
+declare a given node as a how child.
+
+
+━━━ ARCHITECTURE ━━━
+
+model.py — Store class + pure data helpers
+
+  Store(vault: Path):
+    - Loads all YAML files at init into self._data: dict[Path, dict]
+    - Exposes dict-like interface (__getitem__, get, items, keys, __iter__)
+    - Methods:
+        store.find(task_id) → Path | None
+        store.sort() → list[tuple[Path, int]]   # topological order + indent
+        store.traverse(path, "up"|"down") → list[TraversalNode]
+        store.score(query) → dict[Path, float]   # Jaccard similarity
+        store.new_node(description) → (Path, dict)
+        store.save(path, data)
+        store.remove(path)
+        store.promote_inline(parent_path, how_index) → Path
+
+  Pure helpers (no Store dependency):
+    get_how(data) → list[dict]
+    get_constrain(data) → list[dict]
+    is_inline(entry) → bool
+    get_task_id(path) → str
+    load_task(path) → dict
+    save_task(path, data)       # auto-stamps last_modified
+    find_path_by_id(id, store)  # works on any iterable of Paths
+
+  TraversalNode dataclass:
+    path, data, description, status, depth, in_degree, display_indent
+
+  sort() algorithm:
+    - BFS from roots (nodes not referenced as how children by anyone)
+    - display_indent = 0 if root, else max(1, depth - max(0, in_degree - 1))
+    - Shared nodes (in_degree > 1) appear less indented to signal convergence
+
+config.py — pure constants
+    FIELDS: dict[str, "str"|"text"]
+    STATUSES: dict[str, (label, rich_style)]
+    TYPES: dict[str, (label, rich_style)]
+    HORIZONS: dict[str, (label, rich_style)]
+    CONSTRAIN_TYPES: list[ConstrainType]    # but, alternative_to
+    CONSTRAIN_TYPE_MAP: dict[str, ConstrainType]
+
+app.py — Textual TUI
+
+  ── Layout ──────────────────────────────────────────────────────────────────
+
+  Two-column layout. Three application states:
+
+  HOME PAGE
+    Shown at startup and on `h` key from anywhere.
+    Displays root nodes (no how parents) + one level of their children.
+    Navigable: ↑↓ move cursor, Enter opens the node (switches to NODE state).
+    `b` does NOT return to home page — home is only reached via `h`.
+
+  NODE STATE — two panels side by side:
+    Left:  SubgraphPane   — relative map centered on the current node
+    Right: TaskPane       — node view and edit space
+
+  ── SubgraphPane (left) ─────────────────────────────────────────────────────
+
+  Shows the local neighborhood of the current node as a flat indented list,
+  top-to-bottom:
+    - All ancestors up to the roots (going up, all levels)
+    - The current node itself, marked with "►"
+    - All descendants (going down, all levels — truncated at a max count for now)
+
+  Nodes with multiple parents (in_degree > 1) appear once, using topological
+  order to determine position (same algorithm as global sort).
+
+  `Space` on a neighbor previews it in the right panel (read-only, no focus
+  transfer, left panel does not re-center).
+
+  `Enter` on a neighbor selects it — right panel becomes editable and left
+  re-centers on the new node.
+
+  When right panel has focus, ↑↓ are captured by it (field navigation) and
+  do NOT scroll the left panel.
+
+  ── TaskPane (right) ────────────────────────────────────────────────────────
+
+  Displays and edits the selected node. Two modes:
+    - Preview (read-only): activated by Space in the left panel
+    - Edit (full): activated by Enter or Tab
+
+  Row display order, with blank spacers between sections:
+    1. description (always first)
+    2. other scalar/text fields present in the file
+    3. why section (derived backlinks — read-only, shown even in edit mode)
+    4. how section (file refs + inline nodes)
+    5. constrain sections (one per type: but, alternative_to)
+
+  Row kinds: simple | text | spacer |
+             why_header | why_item |
+             how_header | how_item | how_inline | how_add |
+             constrain_header | constrain_item | constrain_add
+
+  Link rows display description + aligned chip columns:
+    "    • Build antenna    project     active     2026-03-01  #KLOP45"
+    Fixed-width columns: type (10), status (9), date (10)
+    Description column padded to the longest description across all link rows.
+
+  Inline node promotion:
+    Navigating into a how_inline row calls store.promote_inline(), creates
+    the file node, updates the parent, then navigates to the new file.
+
+  ── Key bindings ────────────────────────────────────────────────────────────
+
+  Global:
+    h          go to home page
+    b          go back (navigation history — does not include home page)
+    q          quit
+    Tab        switch focus between left and right panel
+
+  Home page:
+    ↑↓         move cursor
+    Enter      open node (switch to node state)
+
+  SubgraphPane (left, when focused):
+    ↑↓         move cursor
+    Enter      select node (re-centers left, focuses right)
+    Space      preview node on right (read-only, left unchanged)
+    n          new node
+    d          delete node
+
+  TaskPane (right, when focused):
+    ↑↓         navigate rows (skips spacers)
+    e          edit current row
+    Enter      confirm edit / follow link
+    Esc        cancel edit — or return focus to left panel
+    n          insert new row below
+    d          delete current row
+    a          add missing field or section
+    l          open link picker
+    u          unlink target (with confirmation)
+
+  Link picker (replaces right panel):
+    ↑↓         navigate
+    Enter      link selected node
+    Esc        cancel
+    First entry is always "✦ Create new task…"
+
+__main__.py — thin CLI (Click)
+    pfq              open TUI
+    pfq new "desc"   create node and open it
+    pfq open FILE    open specific file
+    pfq migrate      convert old links: format to how:/constrain:
+    pfq clean        remove empty fields and empty entries
+
+
+━━━ KEY DESIGN DECISIONS ━━━
+
+- Parent declares how → children (like a regular todo list). Never the reverse.
+- Why is derived, never stored — eliminates consistency bugs.
+- In-file nodes allow friction-free capture without creating files.
+- All files loaded at startup — enables backlink derivation and graph queries
+  without repeated disk reads.
+- Inline nodes have no link identity (index-based). File node links also have
+  no stable ID — this is a known limitation (delete_link requires index).
+- No cycle detection — DAG invariant is assumed by convention.
+- last_modified is auto-stamped on every save (foundation for future
+  bi-temporal model using git history as the transaction log).
+- One YAML file per node — git diff shows exactly what changed.
+- Left panel is a relative map (subgraph of current node), not a global list.
+  Jumping to unrelated nodes requires `h` (home) or `b` (back).
+- Space previews without selecting — left panel stays centered on current node.
+- ↑↓ in right panel capture navigation; left panel is passive when right is focused.
+- Tab switches focus between panels (not left/right arrows, to avoid conflict
+  with text editing).
+
+
+━━━ TECH STACK ━━━
+
+Python 3.11+, Click, PyYAML, Textual (includes Rich)
+Install: pip install -e .
+Run: pfq
