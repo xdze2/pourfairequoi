@@ -169,14 +169,12 @@ def build_backlink_rows(path: "Path", store: dict) -> list[Row]:
                 parents.append((src_path, desc))
                 break
 
-    if not parents:
-        return []
-
     rows: list[Row] = [Row("why_header", "", None)]
     for src_path, src_desc in parents:
         rows.append(
             Row("why_item", "", None, backlink_path=src_path, backlink_desc=src_desc)
         )
+    rows.append(Row("why_add", "", None))
     return rows
 
 
@@ -422,6 +420,7 @@ class SubgraphPane(Widget, can_focus=True):
         Binding("down", "cursor_down", show=False),
         Binding("enter", "select_node", "Select", show=True),
         Binding("space", "preview_node", "Preview", show=False),
+        Binding("e", "edit_right", "Edit", show=True),
         Binding("n", "new_task", "New", show=True),
         Binding("d", "delete_task", "Delete", show=True),
     ]
@@ -633,24 +632,19 @@ class SubgraphPane(Widget, can_focus=True):
         if path:
             self.app._preview_node(path)  # type: ignore[attr-defined]
 
+    def action_edit_right(self) -> None:
+        """Switch focus to task pane and start editing."""
+        pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
+        pane.focus()
+        pane.action_edit()
+
     def action_new_task(self) -> None:
         self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
 
     def _on_new_task(self, description: str | None) -> None:
         if not description:
             return
-        from datetime import date
-
-        path, data = self.store.new_node(description)
-        data.update(
-            {
-                "description": description,
-                "type": "task",
-                "status": "todo",
-                "start_date": date.today().isoformat(),
-            }
-        )
-        self.store.save(path, data)
+        path = self.app._create_node(description)  # type: ignore[attr-defined]
         self.app._open_node(path)  # type: ignore[attr-defined]
 
     def action_delete_task(self) -> None:
@@ -817,18 +811,7 @@ class HomePage(Widget, can_focus=True):
     def _on_new_task(self, description: str | None) -> None:
         if not description:
             return
-        from datetime import date
-
-        path, data = self.store.new_node(description)
-        data.update(
-            {
-                "description": description,
-                "type": "task",
-                "status": "todo",
-                "start_date": date.today().isoformat(),
-            }
-        )
-        self.store.save(path, data)
+        path = self.app._create_node(description)  # type: ignore[attr-defined]
         self.app._open_node(path)  # type: ignore[attr-defined]
 
 
@@ -1096,6 +1079,10 @@ class TaskRowItem(ListItem):
             _pad(t, desc, self._link_desc_width)
             if self._row.backlink_path:
                 _append_chips(t, self._store.get(self._row.backlink_path, {}))
+
+        elif kind == "why_add":
+            t.append("    ← ", style="dim magenta")
+            t.append("[link to a parent…]", style="dim")
 
         if self.selected:
             t.stylize("reverse")
@@ -1588,7 +1575,9 @@ class TaskPane(Widget, can_focus=True):
         if self._editing or not self.path:
             return
         row = self.current_row()
-        if row and row.kind in ("how_header", "how_item", "how_inline", "how_add"):
+        if row and row.kind in ("why_header", "why_item", "why_add"):
+            self.app._start_linking_why()  # type: ignore[attr-defined]
+        elif row and row.kind in ("how_header", "how_item", "how_inline", "how_add"):
             pending_idx = row.idx if row.kind in ("how_item", "how_inline") else -1
             self.app._start_linking("how", None, pending_idx)  # type: ignore[attr-defined]
         elif row and row.kind in (
@@ -1648,6 +1637,30 @@ class TaskPane(Widget, can_focus=True):
                 constrain[idx].pop("target_node", None)
         self.app.store.save(self.path, self.data)
         self.rows = build_rows(self.data)
+        self._rebuild(keep_cursor=self._cursor_idx)
+
+    # ── Public API for App ────────────────────────────────────────────────────
+
+    def load(self, path: Path, data: dict) -> None:
+        """Load a node into the pane and refresh display."""
+        self.path = path
+        self.data = data
+        self.rows = build_rows(data)
+        self._refresh_title()
+        self._rebuild()
+
+    def begin_link(self, section: str, constrain_type: str | None, link_idx: int) -> None:
+        self._link_pending_section = section
+        self._link_pending_type = constrain_type
+        self._link_pending_idx = link_idx
+
+    def clear_link_pending(self) -> None:
+        self._link_pending_section = None
+        self._link_pending_type = None
+        self._link_pending_idx = -1
+
+    def rebuild_in_place(self) -> None:
+        """Rebuild keeping the cursor at its current position."""
         self._rebuild(keep_cursor=self._cursor_idx)
 
 
@@ -1786,6 +1799,7 @@ class PfqApp(App):
         super().__init__()
         self._initial_path = path
         self._history: list[Path] = []
+        self._reverse_link: bool = False  # True when linking in reverse (adding a parent)
         vault = path.parent if path else Path("data")
         self.store = Store(vault)
 
@@ -1864,11 +1878,7 @@ class PfqApp(App):
         # Update task pane
         data = self.store.get(path) or load_task(path)
         self.store[path] = data
-        pane.path = path
-        pane.data = data
-        pane.rows = build_rows(data)
-        pane._refresh_title()
-        pane._rebuild()
+        pane.load(path, data)
 
         # Switch left to subgraph, center on path
         left = self.query_one("#left-switcher", ContentSwitcher)
@@ -1887,13 +1897,8 @@ class PfqApp(App):
 
     def _preview_node(self, path: Path) -> None:
         """Load node in task pane read-only; left panel stays centered."""
-        data = self.store.get(path) or {}
         pane = self.query_one("#task-pane", TaskPane)
-        pane.path = path
-        pane.data = data
-        pane.rows = build_rows(data)
-        pane._refresh_title()
-        pane._rebuild()
+        pane.load(path, self.store.get(path) or {})
         # Do NOT focus task pane — left panel keeps focus
 
     def navigate_to_id(self, link_id: str) -> None:
@@ -1907,9 +1912,7 @@ class PfqApp(App):
         self, section: str, constrain_type: str | None, link_idx: int
     ) -> None:
         pane = self.query_one("#task-pane", TaskPane)
-        pane._link_pending_section = section
-        pane._link_pending_type = constrain_type
-        pane._link_pending_idx = link_idx
+        pane.begin_link(section, constrain_type, link_idx)
         query = ""
         if link_idx >= 0:
             if section == "how":
@@ -1931,6 +1934,9 @@ class PfqApp(App):
         picker.focus()
 
     def _apply_link(self, path: Path) -> None:
+        if self._reverse_link:
+            self._apply_reverse_link(path)
+            return
         pane = self.query_one("#task-pane", TaskPane)
         if not pane.path or pane._link_pending_section is None:
             self._cancel_link()
@@ -1955,19 +1961,62 @@ class PfqApp(App):
 
         self.store.save(pane.path, pane.data)
         pane.rows = build_rows(pane.data)
-        pane._rebuild(keep_cursor=pane._cursor_idx)
-        pane._link_pending_section = None
-        pane._link_pending_type = None
-        pane._link_pending_idx = -1
+        pane.rebuild_in_place()
+        pane.clear_link_pending()
         self._cancel_link()
 
     def _cancel_link(self) -> None:
+        self._reverse_link = False
         right = self.query_one("#right-switcher", ContentSwitcher)
         if right.current == "link-picker":
             right.current = "task-pane"
             self.query_one("#task-pane", TaskPane).focus()
 
+    def _start_linking_why(self) -> None:
+        """Open link picker in reverse mode: the picked node becomes the parent."""
+        pane = self.query_one("#task-pane", TaskPane)
+        if not pane.path:
+            return
+        self._reverse_link = True
+        query = str(pane.data.get("description", "") or "")
+        scores = self.store.score(query) if query else {}
+        picker = self.query_one("#link-picker", LinkPickerPane)
+        picker.refresh_files(scores=scores or None)
+        picker.cursor = 0
+        picker._searching = False
+        picker._query = ""
+        picker.refresh()
+        self.query_one("#right-switcher", ContentSwitcher).current = "link-picker"
+        picker.focus()
+
+    def _apply_reverse_link(self, parent_path: Path) -> None:
+        """Add current node as a how-child of parent_path."""
+        pane = self.query_one("#task-pane", TaskPane)
+        if not pane.path:
+            self._cancel_link()
+            return
+        child_id = get_task_id(pane.path)
+        parent_data = self.store.get(parent_path) or load_task(parent_path)
+        how = parent_data.setdefault("how", [])
+        # Avoid duplicates
+        existing = {(e.get("target_node") or "").upper() for e in how}
+        if child_id.upper() not in existing:
+            how.append({"target_node": child_id})
+            self.store.save(parent_path, parent_data)
+        # Rebuild why rows for current node
+        pane.rows = build_rows(pane.data)
+        pane.rebuild_in_place()
+        self._cancel_link()
+        # Refresh subgraph to show new parent
+        try:
+            self.query_one("#subgraph", SubgraphPane).center_on(pane.path)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     def _create_and_link(self) -> None:
+        if self._reverse_link:
+            self.push_screen(NewTaskModal(""), self._on_new_parent_for_link)
+            return
         pane = self.query_one("#task-pane", TaskPane)
         default = ""
         section = pane._link_pending_section
@@ -1983,19 +2032,27 @@ class PfqApp(App):
                     default = str(constrain[link_idx].get("description", "") or "")
         self.push_screen(NewTaskModal(default), self._on_new_task_for_link)
 
-    def _on_new_task_for_link(self, description: str | None) -> None:
-        if not description:
-            return
-        from datetime import date
-
+    def _create_node(self, description: str, node_type: str = "task") -> Path:
+        """Create, populate, and persist a new node; return its path."""
         path, data = self.store.new_node(description)
         data.update(
             {
                 "description": description,
-                "type": "task",
+                "type": node_type,
                 "status": "todo",
                 "start_date": date.today().isoformat(),
             }
         )
         self.store.save(path, data)
-        self._apply_link(path)
+        return path
+
+    def _on_new_task_for_link(self, description: str | None) -> None:
+        if not description:
+            return
+        self._apply_link(self._create_node(description))
+
+    def _on_new_parent_for_link(self, description: str | None) -> None:
+        if not description:
+            self._cancel_link()
+            return
+        self._apply_reverse_link(self._create_node(description, "goal"))
