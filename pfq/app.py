@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -265,6 +267,149 @@ def _append_chips(t: Text, data: dict) -> None:
         t.append(" " * _DATE_COL)
 
 
+# ── Timeline helpers ──────────────────────────────────────────────────────────
+
+_TYPE_DEFAULT_HORIZON: dict[str, str] = {
+    "goal": "vision",
+    "project": "month",
+    "task": "week",
+    "event": "day",
+    "decision": "week",
+    "milestone": "day",
+    "constraint": "year",
+}
+
+_HORIZON_DAYS: dict[str, int] = {
+    "day": 1,
+    "week": 7,
+    "month": 30,
+    "year": 365,
+    "vision": 3 * 365,
+}
+
+_TL_MAX_DAYS = 3 * 365  # log scale spans ±3 years
+
+
+def _date_to_col(d: date, today: date, now_col: int, total_width: int) -> int:
+    """Map a date to a column index using log scale centred at now_col."""
+    delta = (d - today).days
+    if delta <= 0:
+        past = min(-delta, _TL_MAX_DAYS)
+        if past == 0:
+            return now_col
+        frac = math.log1p(past) / math.log1p(_TL_MAX_DAYS)
+        return max(0, round(now_col * (1 - frac)))
+    else:
+        future = min(delta, _TL_MAX_DAYS)
+        frac = math.log1p(future) / math.log1p(_TL_MAX_DAYS)
+        return min(total_width - 1, now_col + round((total_width - now_col) * frac))
+
+
+def _tl_data(data: dict, parent_start: str | None) -> tuple[str | None, str, str | None]:
+    """Return (tl_start, tl_horizon, tl_due) for a node, inheriting start from parent."""
+    raw_start = str(data.get("start_date", "") or "").strip()
+    tl_start = raw_start if raw_start else parent_start
+
+    node_type = str(data.get("type", "") or "").strip()
+    raw_horizon = str(data.get("horizon", "") or "").strip()
+    tl_horizon = raw_horizon if raw_horizon else _TYPE_DEFAULT_HORIZON.get(node_type, "week")
+
+    raw_due = str(data.get("due_date", "") or "").strip()
+    tl_due = raw_due if raw_due else None
+
+    return tl_start, tl_horizon, tl_due
+
+
+def _append_timeline(line: Text, entry: dict, width: int) -> None:
+    """Append a log-scale timeline bar to a Rich Text line."""
+    if width <= 4:
+        return
+
+    today = date.today()
+    now_col = width // 3  # NOW at 1/3 from left
+
+    tl_start = entry.get("tl_start")
+    tl_horizon = entry.get("tl_horizon", "week")
+    tl_due = entry.get("tl_due")
+    status = entry.get("status", "")
+
+    # Resolve start / end dates
+    start: date | None = None
+    if tl_start:
+        try:
+            start = date.fromisoformat(tl_start)
+        except ValueError:
+            pass
+
+    end: date | None = None
+    if tl_due:
+        try:
+            end = date.fromisoformat(tl_due)
+        except ValueError:
+            pass
+
+    duration = timedelta(days=_HORIZON_DAYS.get(tl_horizon, 7))
+    if start is None and end is not None:
+        start = end - duration
+    elif start is not None and end is None:
+        end = start + duration
+
+    # Build char + style arrays
+    chars = [" "] * width
+    styles: list[str | None] = [None] * width
+
+    # Draw fuzzy bar
+    if start is not None and end is not None:
+        sc = _date_to_col(start, today, now_col, width)
+        ec = _date_to_col(end, today, now_col, width)
+        bar_char = {"done": "░", "active": "█", "stuck": "╌"}.get(status, "▒")
+        bar_style = {
+            "done": "dim",
+            "active": "bold green",
+            "stuck": "dim red",
+        }.get(status, "dim cyan")
+        for c in range(min(sc, ec), max(sc, ec) + 1):
+            if 0 <= c < width:
+                chars[c] = bar_char
+                styles[c] = bar_style
+
+    # NOW marker — ┃ if bar passes through it, │ otherwise
+    if 0 <= now_col < width:
+        if chars[now_col] != " ":
+            chars[now_col] = "┃"
+            styles[now_col] = "bold cyan"
+        else:
+            chars[now_col] = "│"
+            styles[now_col] = "dim"
+
+    # Hard due-date marker (overlaid on top of bar)
+    if tl_due:
+        try:
+            due_obj = date.fromisoformat(tl_due)
+            dc = _date_to_col(due_obj, today, now_col, width)
+            label = due_obj.strftime("%d/%m")
+            if 0 <= dc < width:
+                chars[dc] = "×"
+                styles[dc] = "bold yellow"
+                for j, ch in enumerate(label):
+                    pos = dc + 1 + j
+                    if pos < width:
+                        chars[pos] = ch
+                        styles[pos] = "yellow"
+        except ValueError:
+            pass
+
+    # Render: group consecutive same-style chars into Rich Text spans
+    i = 0
+    while i < width:
+        st = styles[i]
+        j = i + 1
+        while j < width and styles[j] == st:
+            j += 1
+        line.append("".join(chars[i:j]), style=st)
+        i = j
+
+
 class _AppHeader(Static):
     DEFAULT_CSS = "_AppHeader { height: 3; }"
 
@@ -308,6 +453,8 @@ class SubgraphPane(Widget, can_focus=True):
         # indent = "    " * (depth - 1)  →  parent has 0 extra indent, root has most
         up_nodes = self.store.traverse(path, "up")
         for node in sorted(up_nodes, key=lambda n: -n["depth"]):
+            ndata = self.store.get(node["path"], {})
+            ts, th, td = _tl_data(ndata, None)
             entries.append(
                 {
                     "path": node["path"],
@@ -315,11 +462,15 @@ class SubgraphPane(Widget, can_focus=True):
                     "is_current": False,
                     "description": node["description"],
                     "status": node["status"],
+                    "tl_start": ts,
+                    "tl_horizon": th,
+                    "tl_due": td,
                 }
             )
 
         # ── Current node ──────────────────────────────────────────────────────
         data = self.store.get(path, {})
+        cur_ts, cur_th, cur_td = _tl_data(data, None)
         entries.append(
             {
                 "path": path,
@@ -327,6 +478,9 @@ class SubgraphPane(Widget, can_focus=True):
                 "is_current": True,
                 "description": str(data.get("description", "") or get_task_id(path)),
                 "status": str(data.get("status", "") or ""),
+                "tl_start": cur_ts,
+                "tl_horizon": cur_th,
+                "tl_due": cur_td,
             }
         )
 
@@ -346,7 +500,7 @@ class SubgraphPane(Widget, can_focus=True):
                             result.append({"inline": False, "path": child})
             return result
 
-        def _dfs(p: Path, prefix: str) -> None:
+        def _dfs(p: Path, prefix: str, parent_start: str | None = None) -> None:
             kids = _children(p)
             for i, kid in enumerate(kids):
                 last = i == len(kids) - 1
@@ -354,6 +508,7 @@ class SubgraphPane(Widget, can_focus=True):
                 continuation = "    " if last else "│   "
                 if kid["inline"]:
                     e = kid["entry"]
+                    ts, th, td = _tl_data(e, parent_start)
                     entries.append(
                         {
                             "path": None,
@@ -362,12 +517,16 @@ class SubgraphPane(Widget, can_focus=True):
                             "description": str(e.get("description", "") or "(inline)"),
                             "status": str(e.get("status", "") or ""),
                             "_entry_data": e,
+                            "tl_start": ts,
+                            "tl_horizon": th,
+                            "tl_due": td,
                         }
                     )
                 else:
                     child = kid["path"]
                     visited.add(child)
                     cd = self.store.get(child, {})
+                    ts, th, td = _tl_data(cd, parent_start)
                     entries.append(
                         {
                             "path": child,
@@ -377,11 +536,14 @@ class SubgraphPane(Widget, can_focus=True):
                                 cd.get("description", "") or get_task_id(child)
                             ),
                             "status": str(cd.get("status", "") or ""),
+                            "tl_start": ts,
+                            "tl_horizon": th,
+                            "tl_due": td,
                         }
                     )
-                    _dfs(child, prefix + continuation)
+                    _dfs(child, prefix + continuation, ts)
 
-        _dfs(path, "")
+        _dfs(path, "", cur_ts)
 
         self._entries = entries
         for i, e in enumerate(entries):
@@ -403,7 +565,7 @@ class SubgraphPane(Widget, can_focus=True):
 
         visible = self._entries[self._scroll : self._scroll + height]
 
-        # Compute max (prefix + desc) width for chip alignment
+        # Compute max (prefix + desc) width so timeline starts at a fixed column
         desc_col = 0
         for entry in visible:
             w = (
@@ -413,13 +575,16 @@ class SubgraphPane(Widget, can_focus=True):
             )
             desc_col = max(desc_col, w)
 
+        # Timeline width: whatever remains after desc_col + 2 spaces padding
+        total_width = self.size.width or 80
+        tl_width = max(10, total_width - desc_col - 2)
+
         t = Text(no_wrap=True, overflow="ellipsis")
         for i, entry in enumerate(visible):
             abs_i = i + self._scroll
             selected = abs_i == self.cursor
             prefix = entry["tree_prefix"]
             desc = entry["description"] or "—"
-            path = entry["path"]
             line = Text(no_wrap=True, overflow="ellipsis")
             if entry["is_current"]:
                 line.append(prefix, style="dim")
@@ -434,13 +599,13 @@ class SubgraphPane(Widget, can_focus=True):
                     line.append(prefix, style="dim")
                 line.append(desc)
                 used = len(prefix) + len(desc)
-            # Pad to align chips
+            # Pad to align timeline
             gap = desc_col - used
             if gap > 0:
                 line.append(" " * gap)
-            # Chips
-            data = self.store.get(path, {}) if path else entry.get("_entry_data", {})
-            _append_chips(line, data)
+            line.append("  ")
+            # Timeline bar
+            _append_timeline(line, entry, tl_width)
             if selected:
                 line.stylize("reverse")
             t.append_text(line)
