@@ -434,6 +434,86 @@ def _append_timeline(line: Text, entry: dict, width: int) -> None:
         i = j
 
 
+def _append_timeline_axis(line: Text, width: int) -> None:
+    """Append a timeline axis with date labels at log-scale tick positions."""
+    if width <= 4:
+        return
+
+    today = date.today()
+    now_col = width // 3
+
+    # (delta_days, label) — placed left-to-right; label goes right of tick
+    ticks = [
+        (-3 * 365, "◄"),
+        (-365,     "-1y"),
+        (-30,      "-1m"),
+        (0,        "now"),
+        (30,       "+1m"),
+        (365,      "+1y"),
+        (3 * 365,  "►"),
+    ]
+
+    chars = [" "] * width
+    styles: list[str | None] = [None] * width
+
+    # Place "now" marker
+    chars[now_col] = "┬"
+    styles[now_col] = "bold cyan"
+
+    # Place each tick label, skip if it would overlap already-written chars
+    for delta, label in ticks:
+        if delta == 0:
+            col = now_col
+        elif delta < 0:
+            past = min(-delta, _TL_MAX_DAYS)
+            frac = math.log1p(past) / math.log1p(_TL_MAX_DAYS)
+            col = max(0, round(now_col * (1 - frac)))
+        else:
+            future = min(delta, _TL_MAX_DAYS)
+            frac = math.log1p(future) / math.log1p(_TL_MAX_DAYS)
+            col = min(width - 1, now_col + round((width - now_col) * frac))
+
+        # "now" label goes right of the ┬; others: label then tick char
+        if delta == 0:
+            start = col + 1
+            for j, ch in enumerate(label):
+                pos = start + j
+                if pos < width and chars[pos] == " ":
+                    chars[pos] = ch
+                    styles[pos] = "bold cyan"
+        else:
+            # Try to fit label ending at col-1, then tick at col
+            llen = len(label)
+            start = col - llen
+            # Check for overlap
+            overlap = any(
+                0 <= start + j < width and chars[start + j] != " "
+                for j in range(llen)
+            )
+            if not overlap and start >= 0:
+                for j, ch in enumerate(label):
+                    chars[start + j] = ch
+                    styles[start + j] = "dim"
+                if 0 <= col < width and chars[col] == " ":
+                    chars[col] = "┬"
+                    styles[col] = "dim"
+
+    # Underline connecting all tick cols
+    for c in range(width):
+        if chars[c] == " ":
+            chars[c] = "─"
+            styles[c] = "dim"
+
+    i = 0
+    while i < width:
+        st = styles[i]
+        j = i + 1
+        while j < width and styles[j] == st:
+            j += 1
+        line.append("".join(chars[i:j]), style=st)
+        i = j
+
+
 class _AppHeader(Static):
     DEFAULT_CSS = "_AppHeader { height: 3; }"
 
@@ -678,8 +758,11 @@ class SubgraphPane(Widget, can_focus=True):
                 line.append(" " * _CHIP_GAP)
             else:
                 line.append(" " * (_CHIP_GAP + _TYPE_W + _CHIP_GAP + _STATUS_W + _CHIP_GAP))
-            # Timeline bar
-            _append_timeline(line, entry, tl_width)
+            # Timeline bar or axis
+            if entry.get("is_root_link"):
+                _append_timeline_axis(line, tl_width)
+            else:
+                _append_timeline(line, entry, tl_width)
             if selected:
                 line.stylize("reverse" if self.has_focus else "dim")
             t.append_text(line)
