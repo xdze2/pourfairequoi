@@ -129,6 +129,13 @@ Built with Python:
 - PyYAML
 - Textual (TUI framework, includes Rich)
 
+## Status
+
+- [x] Data model + graph traversal (`model.py`)
+- [x] TUI — view only: home page, subgraph view, keyboard navigation
+- [ ] Node editing (create, update fields, add/remove links)
+- [ ] Search / filter on home page
+
 ## Setup
 
 ```bash
