@@ -12,7 +12,7 @@ import argparse
 from pathlib import Path
 
 from pfq.app import PfqApp
-from pfq.model import Store, get_how
+from pfq.disk_io import Store, get_how
 
 
 async def shot(app: PfqApp, pilot, name: str, out: Path) -> None:
