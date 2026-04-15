@@ -68,33 +68,40 @@ A parent declares what it is made of. Natural direction: a project lists its tas
 
 
 ## Architecture
-Terminal-based, using textual.
-All files are loaded into memory at startup.
+
+Terminal-based, using Textual. All files are loaded into memory at startup.
 
 ```
-Disk <---> Model <--api--> UI
+Disk <──> Model <──api──> UI
 ```
+
+The model exposes two tree queries, both returning `[(Node, depth), ...]`:
+- `get_parents_tree(node_id, max_depth=2)` — BFS upward; depth 1 = immediate parent
+- `get_childrens_tree(node_id, max_depth=2)` — BFS downward; depth 1 = immediate child
+
+BFS with a visited set handles DAGs: a shared node appears once, at its shallowest depth. The UI reverses the parents list to display the most distant ancestor at the top.
+
 
 ## UI: Subgraph views
 
-At startup shows a home page: all root nodes (no parents) with type, status, and date chips.
+At startup shows a home page: all root nodes (no parents) with type and status chips.
 
-When a node is open, shows its local neighbourhood with a left margin indicating direction, capped at 3 levels in each direction:
+When a node is selected, shows its local neighbourhood capped at `max_depth=2` in each direction:
 
 ```
      - root
-why     ┌─ grandparent 2 
- │      ┌─ grandparent         goal        active  
- │   ┌─ parent                 project     todo     
- ▶   current node              task        active    
- │   ├─ child 1                task        doable   
- │   └─ child 2                task        done     
-how     └─ grandchild          task        todo     
+why     ┌─ grandparent 2       goal        active
+ │      ┌─ grandparent         goal        active
+ │   ┌─ parent                 project     todo
+ ▶   current node              task        active
+ │   ├─ child 1                task        doable
+ │   └─ child 2                task        done
+how     └─ grandchild          task        todo
 ```
 
-- Left margin: `why`/`│`/`▶`/`│`/`how` shows your position in the hierarchy
-- `root` line at the top — selectable, Enter navigates to the home page
-- Type and status chips aligned in fixed-width columns to the right of descriptions
+- Left margin: `why`/`│`/`▶`/`│`/`how` shows position in the hierarchy
+- `root` line at the top — selectable, Enter navigates home
+- Type and status chips aligned in fixed-width columns to the right
 
 
 ### Keyboard shortcuts

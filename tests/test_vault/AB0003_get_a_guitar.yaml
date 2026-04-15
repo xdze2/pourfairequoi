@@ -1,0 +1,5 @@
+description: Get a guitar
+type: task
+status: doable
+how:
+- target_node: ZZ0001_go_to_shop

@@ -1,0 +1,5 @@
+description: Fix bike
+type: project
+how:
+- target_node: BB0002_buy_inner_tube
+- target_node: BB0003_check_brakes

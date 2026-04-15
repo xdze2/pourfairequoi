@@ -25,6 +25,5 @@ Nodes form a DAG. `how:` links are stored in the parent (parent declares its chi
 | File | Role |
 |---|---|
 | `pfq/model.py` | `Store` class + pure data helpers |
-| `pfq/config.py` | Constants: `FIELDS`, `STATUSES`, `TYPES`, `HORIZONS`, `CONSTRAIN_TYPES` |
 | `pfq/app.py` | Full Textual TUI |
 | `pfq/__main__.py` | Click CLI (`pfq new`, `pfq open`, `pfq migrate`, `pfq clean`) |

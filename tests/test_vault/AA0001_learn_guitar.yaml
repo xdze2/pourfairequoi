@@ -1,0 +1,6 @@
+description: Learn guitar
+type: goal
+status: active
+how:
+- target_node: AB0002_practice_chords
+- target_node: AB0003_get_a_guitar
