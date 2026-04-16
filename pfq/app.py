@@ -4,9 +4,11 @@ from typing import Literal
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import DataTable, Footer
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Input, Label, Select
 
-from pfq.disk_io import DEFAULT_VAULT_PATH
+from pfq.disk_io import DEFAULT_VAULT_PATH, save_node_fields
 from pfq.model import Node, NodeGraph
 
 INDENT = "   "  # per depth level
@@ -17,6 +19,17 @@ PALETTE = {
     "cell_bg": "#1a5276",  # cursor cell   — brighter blue
     "cell_fg": "#eaf2ff",  # cursor cell text — near-white
 }
+
+NODE_TYPES = [
+    "goal",
+    "project",
+    "task",
+    "event",
+    "question",
+    "decision",
+    "milestone",
+    "constraint",
+]
 
 NodeRole = Literal["parent", "selected", "child"]
 
@@ -49,6 +62,83 @@ def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
     return _rich(content, depth)
 
 
+# ── Edit modal ─────────────────────────────────────────────────────────────────
+
+class EditModal(ModalScreen):
+    CSS = """
+    EditModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+        width: 56;
+        height: auto;
+    }
+    #dialog Label {
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #dialog Input, #dialog Select {
+        margin-bottom: 0;
+    }
+    #buttons {
+        margin-top: 1;
+        align: right middle;
+    }
+    #buttons Button {
+        margin-left: 1;
+    }
+    """
+    BINDINGS = [Binding("ctrl+s", "save", "Save"), Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, node: Node):
+        super().__init__()
+        self.node = node
+
+    def compose(self) -> ComposeResult:
+        type_options = [(t, t) for t in NODE_TYPES]
+        with Vertical(id="dialog"):
+            yield Label("Edit node")
+            yield Label("Description")
+            yield Input(value=self.node.description or "", id="input-desc")
+            yield Label("Type")
+            yield Select(
+                type_options,
+                value=self.node.type if self.node.type in NODE_TYPES else Select.BLANK,
+                allow_blank=True,
+                id="input-type",
+            )
+            yield Label("Status")
+            yield Input(value=self.node.status or "", id="input-status")
+            with Horizontal(id="buttons"):
+                yield Button("Save", variant="primary", id="btn-save")
+                yield Button("Cancel", id="btn-cancel")
+
+    def action_save(self) -> None:
+        desc = self.query_one("#input-desc", Input).value.strip()
+        type_sel = self.query_one("#input-type", Select).value
+        status = self.query_one("#input-status", Input).value.strip()
+        self.dismiss({
+            "node_id": self.node.node_id,
+            "description": desc or None,
+            "type": type_sel if type_sel is not Select.BLANK else None,
+            "status": status or None,
+        })
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-save":
+            self.action_save()
+        else:
+            self.action_cancel()
+
+
+# ── Main app ───────────────────────────────────────────────────────────────────
+
 class PfqApp(App):
     TITLE = "pfq"
     CSS = f"""
@@ -61,6 +151,7 @@ class PfqApp(App):
         Binding("q", "quit", "Quit"),
         Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
+        Binding("e", "edit_node", "Edit"),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -162,3 +253,27 @@ class PfqApp(App):
                 self._show_home()
             else:
                 self._show_node(prev)
+
+    # ── Editing ────────────────────────────────────────────────────────────────
+
+    def action_edit_node(self) -> None:
+        t = self._table()
+        cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
+        row_key = str(cell_key.row_key.value)
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            return
+        node = self.graph.get_node(row_key)
+        self.push_screen(EditModal(node), self._on_edit_done)
+
+    def _on_edit_done(self, result: dict | None) -> None:
+        if result is None:
+            return
+        node = self.graph.get_node(result["node_id"])
+        node.description = result["description"]
+        node.type = result["type"]
+        node.status = result["status"]
+        save_node_fields(node)
+        if self.current_node_id is None:
+            self._show_home()
+        else:
+            self._show_node(self.current_node_id)
