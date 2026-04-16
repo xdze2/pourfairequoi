@@ -4,10 +4,11 @@ from typing import Literal
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Input, Label, Select
+from textual.widgets import DataTable, Footer, Input, Label, Select
 
+from pfq.config import FIELDS
 from pfq.disk_io import DEFAULT_VAULT_PATH, save_node_fields
 from pfq.model import Node, NodeGraph
 
@@ -19,17 +20,6 @@ PALETTE = {
     "cell_bg": "#1a5276",  # cursor cell   — brighter blue
     "cell_fg": "#eaf2ff",  # cursor cell text — near-white
 }
-
-NODE_TYPES = [
-    "goal",
-    "project",
-    "task",
-    "event",
-    "question",
-    "decision",
-    "milestone",
-    "constraint",
-]
 
 NodeRole = Literal["parent", "selected", "child"]
 
@@ -65,6 +55,8 @@ def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
 # ── Edit modal ─────────────────────────────────────────────────────────────────
 
 class EditModal(ModalScreen):
+    """Single-field edit modal. Driven by FIELDS config — no hardcoded field logic."""
+
     CSS = """
     EditModal {
         align: center middle;
@@ -73,68 +65,56 @@ class EditModal(ModalScreen):
         background: $surface;
         border: thick $primary;
         padding: 1 2;
-        width: 56;
+        width: 52;
         height: auto;
     }
     #dialog Label {
-        margin-top: 1;
         color: $text-muted;
-    }
-    #dialog Input, #dialog Select {
-        margin-bottom: 0;
-    }
-    #buttons {
-        margin-top: 1;
-        align: right middle;
-    }
-    #buttons Button {
-        margin-left: 1;
+        margin-bottom: 1;
     }
     """
-    BINDINGS = [Binding("ctrl+s", "save", "Save"), Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, node: Node):
+    def __init__(self, node: Node, col_key: str):
         super().__init__()
         self.node = node
+        self.col_key = col_key
+        self.field = FIELDS[col_key]
 
     def compose(self) -> ComposeResult:
-        type_options = [(t, t) for t in NODE_TYPES]
+        current = getattr(self.node, self.field["attr"]) or ""
         with Vertical(id="dialog"):
-            yield Label("Edit node")
-            yield Label("Description")
-            yield Input(value=self.node.description or "", id="input-desc")
-            yield Label("Type")
-            yield Select(
-                type_options,
-                value=self.node.type if self.node.type in NODE_TYPES else Select.BLANK,
-                allow_blank=True,
-                id="input-type",
-            )
-            yield Label("Status")
-            yield Input(value=self.node.status or "", id="input-status")
-            with Horizontal(id="buttons"):
-                yield Button("Save", variant="primary", id="btn-save")
-                yield Button("Cancel", id="btn-cancel")
+            yield Label(self.field["label"])
+            if self.field["kind"] == "select":
+                options = self.field["options"]
+                extra = {"value": current} if current in options else {}
+                yield Select(
+                    [(o, o) for o in options],
+                    allow_blank=True,
+                    id="widget",
+                    **extra,
+                )
+            else:
+                yield Input(value=current, id="widget")
 
-    def action_save(self) -> None:
-        desc = self.query_one("#input-desc", Input).value.strip()
-        type_sel = self.query_one("#input-type", Select).value
-        status = self.query_one("#input-status", Input).value.strip()
-        self.dismiss({
-            "node_id": self.node.node_id,
-            "description": desc or None,
-            "type": type_sel if type_sel is not Select.BLANK else None,
-            "status": status or None,
-        })
+    def on_mount(self) -> None:
+        self.query_one("#widget").focus()
+
+    def _dismiss_with_value(self, value: str | None) -> None:
+        self.dismiss({"attr": self.field["attr"], "value": value or None})
+
+    # text field: Enter submits
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._dismiss_with_value(event.value.strip())
+
+    # select field: auto-dismiss on selection (treat falsy/sentinel as blank)
+    def on_select_changed(self, event: Select.Changed) -> None:
+        options = self.field.get("options", [])
+        value = event.value if event.value in options else None
+        self._dismiss_with_value(value)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-save":
-            self.action_save()
-        else:
-            self.action_cancel()
 
 
 # ── Main app ───────────────────────────────────────────────────────────────────
@@ -260,18 +240,24 @@ class PfqApp(App):
         t = self._table()
         cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
         row_key = str(cell_key.row_key.value)
+        col_key = str(cell_key.column_key.value)
         if row_key == "__home__" or row_key not in self.graph.nodes:
             return
+        if col_key not in FIELDS:
+            return
         node = self.graph.get_node(row_key)
-        self.push_screen(EditModal(node), self._on_edit_done)
+        self.push_screen(EditModal(node, col_key), self._on_edit_done)
 
     def _on_edit_done(self, result: dict | None) -> None:
         if result is None:
             return
-        node = self.graph.get_node(result["node_id"])
-        node.description = result["description"]
-        node.type = result["type"]
-        node.status = result["status"]
+        # result = {"attr": "description"|"type"|"status", "value": str|None}
+        # We derive node_id from the current cursor (modal was opened from it)
+        t = self._table()
+        cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
+        node_id = str(cell_key.row_key.value)
+        node = self.graph.get_node(node_id)
+        setattr(node, result["attr"], result["value"])
         save_node_fields(node)
         if self.current_node_id is None:
             self._show_home()
