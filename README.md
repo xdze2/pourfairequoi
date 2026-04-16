@@ -16,8 +16,8 @@ Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
 - No required fields — capture first, refine later
 - One YAML file per node — git-friendly (readable diffs, version history)
 - Each node is a YAML file in the `data/` directory.
-- Filename format: `{random_6_char}_{readable_slug}.yaml` 
-- `node_id` is the entire file stem.
+- Filename format: `{node_id}_{readable_slug}.yaml`
+- `node_id` is the 6-character random prefix (e.g. `AB0002`). The slug is cosmetic — human-readable in file explorers, never used for resolution.
 
 
 ## Data model
@@ -49,12 +49,12 @@ type: project                            # see node types above
 status: active                           # see statuses above
 
 how:
-- target_node: KLOP45_get_the_case       # link to a child file node (full stem)
+- target_node: KLOP45_get_the_case       # {node_id}_{slug} — slug is informational only
 - target_node: OAAP11_repair_capacitors
 
 ```
 
-Every `how` entry must reference a file node via `target_node`.
+Every `how` entry references a node via `target_node: {node_id}_{slug}`. The model resolves links using only the `node_id` prefix — the slug can go stale if a node is renamed without updating its incoming links, which is acceptable (use a linter to re-sync slugs).
 
 
 ### Link directions

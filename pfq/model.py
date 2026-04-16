@@ -5,6 +5,10 @@ from typing import List
 import yaml
 
 
+def filename_to_node_id(filename: str) -> str:
+    return filename.split("_")[0].upper()
+
+
 @dataclass
 class Node:
     node_id: str
@@ -12,6 +16,7 @@ class Node:
     type: str = None
     status: str = None
     how: List[str] = field(default_factory=list)
+    filepath: str = None
 
 
 class NodeGraph:
@@ -23,10 +28,10 @@ class NodeGraph:
     def load_from_disk(cls, vault_path: Path) -> "NodeGraph":
         graph = cls()
         for path in sorted(vault_path.glob("*.yaml")):
-            node_id = path.stem
+            node_id = filename_to_node_id(path.stem)
             raw = yaml.safe_load(path.read_text()) or {}
             how = [
-                entry["target_node"]
+                filename_to_node_id(entry["target_node"])
                 for entry in (raw.get("how") or [])
                 if isinstance(entry, dict) and "target_node" in entry
             ]
@@ -36,6 +41,7 @@ class NodeGraph:
                 type=raw.get("type"),
                 status=raw.get("status"),
                 how=how,
+                filepath=str(path),
             )
 
         # Build reverse index
@@ -59,7 +65,9 @@ class NodeGraph:
     def get_roots(self) -> List[str]:
         return [nid for nid, parents in self._parents.items() if not parents]
 
-    def _bfs_tree(self, node_id: str, neighbors_fn, max_depth: int) -> List[tuple["Node", int]]:
+    def _bfs_tree(
+        self, node_id: str, neighbors_fn, max_depth: int
+    ) -> List[tuple["Node", int]]:
         """Generic BFS traversal. neighbors_fn(node_id) -> List[str]."""
         result, visited = [], {node_id}
         queue = [(nid, 1) for nid in neighbors_fn(node_id)]
@@ -70,15 +78,23 @@ class NodeGraph:
             visited.add(current_id)
             result.append((self.nodes[current_id], depth))
             if depth < max_depth:
-                queue += [(nid, depth + 1) for nid in neighbors_fn(current_id) if nid not in visited]
+                queue += [
+                    (nid, depth + 1)
+                    for nid in neighbors_fn(current_id)
+                    if nid not in visited
+                ]
         return result
 
-    def get_parents_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+    def get_parents_tree(
+        self, node_id: str, max_depth: int = 2
+    ) -> List[tuple["Node", int]]:
         """BFS upward. Returns [(node, depth), ...] closest-first, current node excluded.
         Depth 1 = immediate parent. Diamond DAGs: node appears at shallowest depth."""
         return self._bfs_tree(node_id, self.get_node_parents, max_depth)
 
-    def get_childrens_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+    def get_childrens_tree(
+        self, node_id: str, max_depth: int = 2
+    ) -> List[tuple["Node", int]]:
         """BFS downward. Returns [(node, depth), ...] closest-first, current node excluded.
         Depth 1 = immediate child. Dangling references silently skipped."""
         return self._bfs_tree(node_id, self.get_node_childrens, max_depth)
