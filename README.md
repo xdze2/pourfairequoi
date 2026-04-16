@@ -112,8 +112,17 @@ how     └─ grandchild          task        todo
 | `h` | Home page |
 | `esc` | Go back to previously selected node (navigation history) |
 | `q` | Quit |
-| `↑` / `↓` | Navigate between node|
+| `↑` / `↓` | Navigate between nodes |
 | `Enter` | Select one node (or go home if on `root` line) |
+
+#### Editing
+| Key | Action |
+|---|---|
+| `e` | Edit the focused cell (description, type, or status) |
+| `Enter` | Save (text fields) |
+| `Esc` | Cancel |
+
+Pressing `e` opens a modal for the currently focused cell only. Type selection auto-saves on choice.
 
 ### CLI
 
@@ -133,7 +142,8 @@ Built with Python:
 
 - [x] Data model + graph traversal (`model.py`)
 - [x] TUI — view only: home page, subgraph view, keyboard navigation
-- [ ] Node editing (create, update fields, add/remove links)
+- [x] Node editing — update fields (description, type, status)
+- [ ] Node editing — create node, add/remove links
 - [ ] Search / filter on home page
 
 ## Setup

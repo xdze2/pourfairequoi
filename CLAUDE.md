@@ -19,8 +19,9 @@ reversing `how` links at load time — never stored.
 | File | Role |
 |---|---|
 | `pfq/model.py` | `Node` dataclass + `NodeGraph` (load, traversal) |
-| `pfq/disk_io.py` | File I/O helpers, `DEFAULT_VAULT_PATH` |
-| `pfq/app.py` | Textual TUI — view only for now |
+| `pfq/disk_io.py` | File I/O helpers, `DEFAULT_VAULT_PATH`, `save_node_fields` |
+| `pfq/config.py` | `FIELDS` dict — editable column definitions (label, kind, attr, options) |
+| `pfq/app.py` | Textual TUI — navigation + field editing via `EditModal` |
 | `pfq/__main__.py` | Click CLI entry point |
 
 ## Key API
@@ -40,6 +41,18 @@ graph.get_childrens_tree(node_id, max_depth=2) # -> List[(Node, int)]
 
 Tree methods return `(node, depth)` pairs, DFS pre-order: each node appears immediately before its subtree (correct for tree views).
 `get_parents_tree` result must be reversed before display (farthest ancestor on top).
+
+## Editing (`app.py` + `config.py`)
+
+`e` on a cell opens `EditModal(node, col_key)`. The modal looks up `FIELDS[col_key]` and renders one widget:
+- `kind: "text"` → `Input`, dismissed on `Enter` via `on_input_submitted`
+- `kind: "select"` → `Select`, auto-dismissed on `on_select_changed` (membership check, not `Select.BLANK`)
+
+After dismiss, `_on_edit_done` calls `setattr(node, attr, value)` then `save_node_fields(node)`.
+
+`save_node_fields` in `disk_io.py` reads the raw YAML, patches only the three text fields, and writes back — `how` links are preserved untouched.
+
+To add a new editable field: add one entry to `FIELDS` in `config.py`. No changes needed elsewhere.
 
 ## TUI row notation (`app.py`)
 
@@ -67,3 +80,7 @@ tests/
 ```
 
 `ListView.clear()` and `ListView.extend()` are async — always `await` them.
+
+
+
+**Important Textual gotcha:** `ListView.clear()` and `ListView.extend()` return awaitables — must be awaited or DOM updates are silently deferred (was the first UI bug).
