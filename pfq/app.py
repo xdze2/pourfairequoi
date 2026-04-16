@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -11,6 +12,11 @@ INDENT = "   "  # per depth level
 TYPE_W = 12
 STATUS_W = 10
 
+NodeRole = Literal["parent", "selected", "child"]
+
+_ROLE_CONNECTOR     = {"parent": "┌─", "child": "└─"}
+_ROLE_BOUNDARY_LABEL = {"parent": "why", "child": "how"}
+
 
 def _chips(node: Node) -> str:
     type_ = (node.type or "")[:TYPE_W]
@@ -18,10 +24,43 @@ def _chips(node: Node) -> str:
     return f"{type_:<{TYPE_W}}  {status}"
 
 
-def _row(margin: str, depth: int, connector: str, node: Node) -> str:
-    indent = INDENT * (depth - 1)
+def _depth_markup(text: str, depth: int) -> str:
+    """Wrap text in Rich markup for the given depth: 0 → bold, 2 → dim, else plain."""
+    if depth == 0:
+        return f"[bold]{text}[/bold]"
+    if depth == 2:
+        return f"[dim]{text}[/dim]"
+    return text
+
+
+def _styled_desc(desc: str, width: int, depth: int) -> str:
+    """Pad description to width, then apply depth markup.
+
+    Padding is applied before markup so tag characters don't skew alignment.
+    """
+    return _depth_markup(f"{desc:<{width}}", depth)
+
+
+def _format_tree_row(role: NodeRole, depth: int, node: Node, *, boundary: bool = False) -> str:
+    """Format a tree node as a display row from its semantic role and depth.
+
+    role     │ connector │ depth meaning
+    ─────────┼───────────┼──────────────────────────────
+    parent   │ ┌─        │ distance to current node (dim at 2)
+    selected │ —         │ always 0 → bold
+    child    │ └─        │ distance from current node (dim at 2)
+
+    boundary=True shows "why" (parent) or "how" (child) in the margin instead of " │ ".
+    """
     desc = node.description or ""
-    return f"{margin}  {indent}{connector} {desc:<36} {_chips(node)}"
+
+    if role == "selected":
+        return f" ▶   {_styled_desc(desc, 38, 0)} {_chips(node)}"
+
+    margin = _ROLE_BOUNDARY_LABEL[role] if boundary else " │ "
+    indent = INDENT * (depth - 1)
+    connector = _depth_markup(_ROLE_CONNECTOR[role], depth)
+    return f"{margin}  {indent}{connector} {_styled_desc(desc, 36, depth)} {_chips(node)}"
 
 
 class PfqApp(App):
@@ -55,7 +94,7 @@ class PfqApp(App):
         for node_id in sorted(self.graph.get_roots()):
             node = self.graph.get_node(node_id)
             desc = node.description or ""
-            text = f"  {desc:<38} {_chips(node)}"
+            text = f"  {_styled_desc(desc, 38, 0)} {_chips(node)}"
             items.append(ListItem(Label(text), id=f"n_{node_id}"))
         await lv.extend(items)
 
@@ -72,26 +111,17 @@ class PfqApp(App):
         # Root line
         items.append(ListItem(Label("    ─ root"), id="go_home"))
 
-        # Parents — farthest first; first shown gets "why" label
+        # Parents — farthest first; farthest gets "why" boundary label
         for i, (node, depth) in enumerate(parents):
-            margin = "why" if i == 0 else " │ "
-            items.append(
-                ListItem(Label(_row(margin, depth, "┌─", node)), id=f"n_{node.node_id}")
-            )
+            items.append(ListItem(Label(_format_tree_row("parent", depth, node, boundary=(i == 0))), id=f"n_{node.node_id}"))
 
         # Current node
         current = self.graph.get_node(node_id)
-        desc = current.description or ""
-        items.append(
-            ListItem(Label(f" ▶   {desc:<38} {_chips(current)}"), id=f"n_{node_id}")
-        )
+        items.append(ListItem(Label(_format_tree_row("selected", 0, current)), id=f"n_{node_id}"))
 
-        # Children — closest first; last shown gets "how" label
+        # Children — closest first; last gets "how" boundary label
         for i, (node, depth) in enumerate(children):
-            margin = "how" if i == len(children) - 1 else " │ "
-            items.append(
-                ListItem(Label(_row(margin, depth, "└─", node)), id=f"n_{node.node_id}")
-            )
+            items.append(ListItem(Label(_format_tree_row("child", depth, node, boundary=(i == len(children) - 1))), id=f"n_{node.node_id}"))
 
         await lv.extend(items)
         lv.index = 1 + len(parents)

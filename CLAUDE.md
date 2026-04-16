@@ -41,6 +41,22 @@ graph.get_childrens_tree(node_id, max_depth=2) # -> List[(Node, int)]
 Tree methods return `(node, depth)` pairs, DFS pre-order: each node appears immediately before its subtree (correct for tree views).
 `get_parents_tree` result must be reversed before display (farthest ancestor on top).
 
+## TUI row notation (`app.py`)
+
+Tree rows use three semantic roles: `"parent"`, `"selected"`, `"child"`.
+Do **not** use `"why"` or `"how"` as role values — those are UX labels, not roles.
+The boundary label ("why" / "how") is controlled by the `boundary=True` kwarg on `_format_tree_row`.
+
+```python
+# correct
+_format_tree_row("parent", depth, node, boundary=True)   # shows "why" margin
+_format_tree_row("child",  depth, node, boundary=False)  # shows " │ " margin
+
+# wrong — "why" and "how" are not valid roles
+_format_tree_row("why",  depth, node)
+_format_tree_row("how",  depth, node)
+```
+
 ## Tests
 
 ```
