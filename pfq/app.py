@@ -9,7 +9,14 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, Select
 
 from pfq.config import FIELDS
-from pfq.disk_io import DEFAULT_VAULT_PATH, save_node_fields
+from pfq.disk_io import (
+    DEFAULT_VAULT_PATH,
+    add_child_link,
+    create_node,
+    delete_node_file,
+    remove_child_link,
+    save_node_fields,
+)
 from pfq.model import Node, NodeGraph
 
 INDENT = "   "  # per depth level
@@ -50,6 +57,93 @@ def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
     else:
         content = f"{INDENT * (depth - 1)}{_ROLE_CONNECTOR[role]} {raw}"
     return _rich(content, depth)
+
+
+# ── Create modal ──────────────────────────────────────────────────────────────
+
+class CreateModal(ModalScreen):
+    """Prompt for a description, then dismiss with the string (or None on cancel)."""
+
+    CSS = """
+    CreateModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+        width: 52;
+        height: auto;
+    }
+    #dialog Label {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, parent_label: str):
+        super().__init__()
+        self.parent_label = parent_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"New child of: {self.parent_label}")
+            yield Input(placeholder="Description…", id="widget")
+
+    def on_mount(self) -> None:
+        self.query_one("#widget").focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = event.value.strip()
+        self.dismiss(value if value else None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── Delete modal ───────────────────────────────────────────────────────────────
+
+class DeleteModal(ModalScreen):
+    """Confirmation prompt before deleting a node."""
+
+    CSS = """
+    DeleteModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $surface;
+        border: thick $error;
+        padding: 1 2;
+        width: 52;
+        height: auto;
+    }
+    #dialog Label {
+        margin-bottom: 1;
+    }
+    #hint {
+        color: $text-muted;
+    }
+    """
+    BINDINGS = [
+        Binding("d", "confirm", "Confirm delete"),
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, node_label: str):
+        super().__init__()
+        self.node_label = node_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f'Delete "{self.node_label}" ?')
+            yield Label("[d] confirm    [Esc] cancel", id="hint")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 # ── Edit modal ─────────────────────────────────────────────────────────────────
@@ -132,6 +226,8 @@ class PfqApp(App):
         Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
         Binding("e", "edit_node", "Edit"),
+        Binding("a", "append_node", "Append"),
+        Binding("d", "delete_node", "Delete"),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -261,6 +357,103 @@ class PfqApp(App):
         setattr(node, result["attr"], result["value"])
         save_node_fields(node)
         if self.current_node_id is None:
+            self._show_home()
+        else:
+            self._show_node(self.current_node_id)
+
+    # ── Append ─────────────────────────────────────────────────────────────────
+
+    def action_append_node(self) -> None:
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+
+        if self.current_node_id is None:
+            # Home view: create a new root
+            self.push_screen(CreateModal("(root)"), self._on_create_root)
+            return
+
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            return
+
+        # Parent row: ignore
+        parents = [n.node_id for n, _ in self.graph.get_parents_tree(self.current_node_id)]
+        if row_key in parents:
+            return
+
+        # Determine insertion position among current node's children
+        children_ids = self.graph.get_node_childrens(self.current_node_id)
+        if row_key == self.current_node_id:
+            position = 0
+        else:
+            # Find the top-level child at or above cursor
+            # Walk children tree rows to locate which top-level child the cursor is under
+            child_rows = [n.node_id for n, _ in self.graph.get_childrens_tree(self.current_node_id)]
+            cursor_idx = child_rows.index(row_key) if row_key in child_rows else -1
+            # Find the top-level child that contains or is the cursor row
+            top_child = None
+            for i, cid in enumerate(children_ids):
+                subtree = {n.node_id for n, _ in self.graph.get_childrens_tree(cid)}
+                subtree.add(cid)
+                if row_key in subtree:
+                    top_child = i
+                    break
+            position = (top_child + 1) if top_child is not None else len(children_ids)
+
+        parent_node = self.graph.get_node(self.current_node_id)
+        label = parent_node.description or self.current_node_id
+        self.push_screen(CreateModal(label), lambda desc: self._on_create_child(desc, position))
+
+    def _on_create_root(self, description: str | None) -> None:
+        if not description:
+            return
+        node = create_node(description, self.vault_path)
+        self.graph.add_node(node)
+        self._show_home()
+
+    def _on_create_child(self, description: str | None, position: int) -> None:
+        if not description:
+            return
+        node = create_node(description, self.vault_path)
+        self.graph.add_node(node)
+        parent_node = self.graph.get_node(self.current_node_id)
+        self.graph.link_child(self.current_node_id, node.node_id, position)
+        add_child_link(parent_node, node.node_id, position)
+        self._show_node(self.current_node_id)
+
+    # ── Delete ─────────────────────────────────────────────────────────────────
+
+    def action_delete_node(self) -> None:
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            return
+
+        node = self.graph.get_node(row_key)
+        label = node.description or row_key
+        self.push_screen(DeleteModal(label), lambda confirmed: self._on_delete_confirmed(confirmed, row_key))
+
+    def _on_delete_confirmed(self, confirmed: bool, node_id: str) -> None:
+        if not confirmed:
+            return
+        node = self.graph.get_node(node_id)
+        # Remove links from all parents
+        for parent_id in list(self.graph.get_node_parents(node_id)):
+            remove_child_link(self.graph.get_node(parent_id), node_id)
+        delete_node_file(node)
+        # If we're deleting the currently viewed node, go back
+        navigating_away = (node_id == self.current_node_id)
+        self.graph.remove_node(node_id)
+        if navigating_away:
+            if self.history:
+                prev = self.history.pop()
+                if prev is None or prev not in self.graph.nodes:
+                    self._show_home()
+                else:
+                    self._show_node(prev)
+            else:
+                self._show_home()
+        elif self.current_node_id is None:
             self._show_home()
         else:
             self._show_node(self.current_node_id)

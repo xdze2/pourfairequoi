@@ -62,6 +62,40 @@ class NodeGraph:
     def get_node_childrens(self, node_id: str) -> List[str]:
         return self.nodes[node_id].how if node_id in self.nodes else []
 
+    def add_node(self, node: "Node") -> None:
+        """Register a newly created node (no links yet)."""
+        self.nodes[node.node_id] = node
+        self._parents[node.node_id] = []
+
+    def link_child(self, parent_id: str, child_id: str, position: int) -> None:
+        """Insert child_id into parent's how list at position (in-memory)."""
+        parent = self.nodes[parent_id]
+        parent.how.insert(position, child_id)
+        self._parents.setdefault(child_id, [])
+        if parent_id not in self._parents[child_id]:
+            self._parents[child_id].append(parent_id)
+
+    def unlink_child(self, parent_id: str, child_id: str) -> None:
+        """Remove child_id from parent's how list (in-memory)."""
+        parent = self.nodes[parent_id]
+        parent.how = [c for c in parent.how if c != child_id]
+        if child_id in self._parents:
+            self._parents[child_id] = [p for p in self._parents[child_id] if p != parent_id]
+
+    def remove_node(self, node_id: str) -> None:
+        """Remove node and all links to/from it (in-memory). Orphans children."""
+        if node_id not in self.nodes:
+            return
+        # Remove from all parents' how lists
+        for parent_id in list(self._parents.get(node_id, [])):
+            self.nodes[parent_id].how = [c for c in self.nodes[parent_id].how if c != node_id]
+        # Remove node's children's back-references
+        for child_id in self.nodes[node_id].how:
+            if child_id in self._parents:
+                self._parents[child_id] = [p for p in self._parents[child_id] if p != node_id]
+        del self.nodes[node_id]
+        del self._parents[node_id]
+
     def get_roots(self) -> List[str]:
         return [nid for nid, parents in self._parents.items() if not parents]
 
