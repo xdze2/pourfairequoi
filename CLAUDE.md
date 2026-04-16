@@ -38,7 +38,7 @@ graph.get_childrens_tree(node_id, max_depth=2) # -> List[(Node, int)]
 `node_id` is the 6-char prefix extracted from the filename stem (e.g. `AB0002` from `AB0002_practice_chords.yaml`).
 `target_node` in YAML always stores the full stem (`AB0002_practice_chords`) — the slug is cosmetic and may go stale on rename.
 
-Tree methods return `(node, depth)` pairs, BFS order, closest-first.
+Tree methods return `(node, depth)` pairs, DFS pre-order: each node appears immediately before its subtree (correct for tree views).
 `get_parents_tree` result must be reversed before display (farthest ancestor on top).
 
 ## Tests

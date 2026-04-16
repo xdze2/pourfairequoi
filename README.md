@@ -76,10 +76,10 @@ Disk <──> Model <──api──> UI
 ```
 
 The model exposes two tree queries, both returning `[(Node, depth), ...]`:
-- `get_parents_tree(node_id, max_depth=2)` — BFS upward; depth 1 = immediate parent
-- `get_childrens_tree(node_id, max_depth=2)` — BFS downward; depth 1 = immediate child
+- `get_parents_tree(node_id, max_depth=2)` — DFS upward; depth 1 = immediate parent
+- `get_childrens_tree(node_id, max_depth=2)` — DFS downward; depth 1 = immediate child
 
-BFS with a visited set handles DAGs: a shared node appears once, at its shallowest depth. The UI reverses the parents list to display the most distant ancestor at the top.
+DFS pre-order with a visited set handles DAGs: a shared node appears once. Each node appears immediately before its subtree, so the output maps directly to a tree view. The UI reverses the parents list to display the most distant ancestor at the top.
 
 
 ## UI: Subgraph views

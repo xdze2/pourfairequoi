@@ -65,22 +65,24 @@ class NodeGraph:
     def get_roots(self) -> List[str]:
         return [nid for nid, parents in self._parents.items() if not parents]
 
-    def _bfs_tree(
+    def _dfs_tree(
         self, node_id: str, neighbors_fn, max_depth: int
     ) -> List[tuple["Node", int]]:
-        """Generic BFS traversal. neighbors_fn(node_id) -> List[str]."""
+        """Generic DFS pre-order traversal. neighbors_fn(node_id) -> List[str].
+        Each node appears immediately before its subtree (correct for tree views)."""
         result, visited = [], {node_id}
-        queue = [(nid, 1) for nid in neighbors_fn(node_id)]
-        while queue:
-            current_id, depth = queue.pop(0)
+        # Push in reverse so first neighbor is processed first
+        stack = [(nid, 1) for nid in reversed(neighbors_fn(node_id))]
+        while stack:
+            current_id, depth = stack.pop()
             if current_id in visited or current_id not in self.nodes:
                 continue
             visited.add(current_id)
             result.append((self.nodes[current_id], depth))
             if depth < max_depth:
-                queue += [
+                stack += [
                     (nid, depth + 1)
-                    for nid in neighbors_fn(current_id)
+                    for nid in reversed(neighbors_fn(current_id))
                     if nid not in visited
                 ]
         return result
@@ -88,13 +90,13 @@ class NodeGraph:
     def get_parents_tree(
         self, node_id: str, max_depth: int = 2
     ) -> List[tuple["Node", int]]:
-        """BFS upward. Returns [(node, depth), ...] closest-first, current node excluded.
+        """DFS upward. Returns [(node, depth), ...] closest-first, current node excluded.
         Depth 1 = immediate parent. Diamond DAGs: node appears at shallowest depth."""
-        return self._bfs_tree(node_id, self.get_node_parents, max_depth)
+        return self._dfs_tree(node_id, self.get_node_parents, max_depth)
 
     def get_childrens_tree(
         self, node_id: str, max_depth: int = 2
     ) -> List[tuple["Node", int]]:
-        """BFS downward. Returns [(node, depth), ...] closest-first, current node excluded.
-        Depth 1 = immediate child. Dangling references silently skipped."""
-        return self._bfs_tree(node_id, self.get_node_childrens, max_depth)
+        """DFS downward. Returns [(node, depth), ...] pre-order, current node excluded.
+        Depth 1 = immediate child. Each child appears immediately after its parent. Dangling references silently skipped."""
+        return self._dfs_tree(node_id, self.get_node_childrens, max_depth)
