@@ -13,9 +13,9 @@ INDENT = "   "  # per depth level
 
 # ── Color palette ──────────────────────────────────────────────────────────────
 PALETTE = {
-    "row_bg":   "#1c2d40",  # selected row — dark slate-blue
-    "cell_bg":  "#1a5276",  # cursor cell — brighter blue
-    "cell_fg":  "#eaf2ff",  # cursor cell text — near-white
+    "row_bg":  "#1c2d40",  # selected row  — dark slate-blue (reserved, not yet applied)
+    "cell_bg": "#1a5276",  # cursor cell   — brighter blue
+    "cell_fg": "#eaf2ff",  # cursor cell text — near-white
 }
 
 NodeRole = Literal["parent", "selected", "child"]
@@ -52,9 +52,6 @@ def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
 class PfqApp(App):
     TITLE = "pfq"
     CSS = f"""
-    DataTable > .datatable--highlight {{
-        background: {PALETTE['row_bg']};
-    }}
     DataTable > .datatable--cursor {{
         background: {PALETTE['cell_bg']};
         color: {PALETTE['cell_fg']};
@@ -89,14 +86,7 @@ class PfqApp(App):
     def _table(self) -> DataTable:
         return self.query_one(DataTable)
 
-    def _add_row(
-        self,
-        role: NodeRole,
-        depth: int,
-        node: Node,
-        *,
-        boundary: bool = False,
-    ) -> None:
+    def _add_row(self, role: NodeRole, depth: int, node: Node, *, boundary: bool = False) -> None:
         self._table().add_row(
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node),
