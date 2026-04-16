@@ -6,8 +6,8 @@ Guidance for Claude Code when working in this repository.
 
 ```bash
 pip install -e .          # install in editable mode (do this once)
-pfq                       # launch the TUI
-pfq --vault /path/to/dir  # use a custom vault directory
+pfq                       # launch the TUI (default vault: data/)
+pfq /path/to/vault        # open vault at given path (must exist)
 venv/bin/pytest           # run tests
 ```
 

@@ -136,6 +136,7 @@ class PfqApp(App):
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
         super().__init__()
+        self.vault_path = vault_path
         self.graph = NodeGraph.load_from_disk(vault_path)
         self.current_node_id: str | None = None
         self.history: list[str | None] = []
