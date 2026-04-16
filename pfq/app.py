@@ -126,7 +126,8 @@ class DeleteModal(ModalScreen):
     }
     """
     BINDINGS = [
-        Binding("d", "confirm", "Confirm delete"),
+        Binding("y", "confirm", "Yes, delete"),
+        Binding("n", "cancel", "Cancel"),
         Binding("escape", "cancel", "Cancel"),
     ]
 
@@ -137,7 +138,7 @@ class DeleteModal(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(f'Delete "{self.node_label}" ?')
-            yield Label("[d] confirm    [Esc] cancel", id="hint")
+            yield Label("\\[y] confirm    \\[n / Esc] cancel", id="hint")
 
     def action_confirm(self) -> None:
         self.dismiss(True)
@@ -365,12 +366,13 @@ class PfqApp(App):
 
     def action_append_node(self) -> None:
         t = self._table()
-        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
 
         if self.current_node_id is None:
-            # Home view: create a new root
+            # Home view: create a new root (table may be empty)
             self.push_screen(CreateModal("(root)"), self._on_create_root)
             return
+
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
 
         if row_key == "__home__" or row_key not in self.graph.nodes:
             return
