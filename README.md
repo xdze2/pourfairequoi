@@ -11,7 +11,7 @@ Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
 - Brain dump ideas without friction, then clarify them
 
 ## Key design principles:
-- Local files for privacy
+- Local files for privacy and its exportable
 - Terminal-based, minimal UI
 - No required fields — capture first, refine later
 - One YAML file per node — git-friendly (readable diffs, version history)
