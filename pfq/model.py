@@ -1,10 +1,5 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, NamedTuple
-
-
-def filename_to_node_id(filename: str) -> str:
-    return filename.split("_")[0].upper()
 
 
 class Link(NamedTuple):
@@ -27,34 +22,6 @@ class NodeGraph:
         self.links: set[Link] = set()
         # Tracks child insertion order per parent: parent_id → [child_id, ...]
         self._child_order: dict[str, list[str]] = {}
-
-    @classmethod
-    def load_from_disk(cls, vault_path: Path) -> "NodeGraph":
-        import yaml
-
-        graph = cls()
-        for path in sorted(vault_path.glob("*.yaml")):
-            node_id = filename_to_node_id(path.stem)
-            raw = yaml.safe_load(path.read_text()) or {}
-            graph.nodes[node_id] = Node(
-                node_id=node_id,
-                description=raw.get("description"),
-                type=raw.get("type"),
-                status=raw.get("status"),
-                filepath=str(path),
-            )
-
-        for path in sorted(vault_path.glob("*.yaml")):
-            parent_id = filename_to_node_id(path.stem)
-            raw = yaml.safe_load(path.read_text()) or {}
-            for entry in raw.get("how") or []:
-                if isinstance(entry, dict) and "target_node" in entry:
-                    child_id = filename_to_node_id(entry["target_node"])
-                    if child_id in graph.nodes:
-                        graph.links.add(Link(parent_id, child_id))
-                        graph._child_order.setdefault(parent_id, []).append(child_id)
-
-        return graph
 
     def get_node(self, node_id: str) -> Node:
         return self.nodes[node_id]

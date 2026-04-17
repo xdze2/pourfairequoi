@@ -27,7 +27,7 @@ reversing `how` links at load time — never stored.
 ## Key API
 
 ```python
-graph = NodeGraph.load_from_disk(path)
+graph = load_vault(path)                               # from pfq.disk_io
 graph.get_node(node_id)                        # -> Node  (node_id is the 6-char prefix, e.g. "AB0002")
 graph.get_parent_ids(node_id)                  # -> List[str]
 graph.get_children_ids(node_id)                # -> List[str], insertion order

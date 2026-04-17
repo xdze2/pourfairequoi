@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from pfq.disk_io import load_vault
 from pfq.model import NodeGraph
 
 VAULT = Path(__file__).parent / "test_vault"
@@ -11,7 +12,7 @@ VAULT = Path(__file__).parent / "test_vault"
 
 @pytest.fixture
 def graph():
-    return NodeGraph.load_from_disk(VAULT)
+    return load_vault(VAULT)
 
 
 # ── Loading ────────────────────────────────────────────────────────────────────

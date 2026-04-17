@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import random
 import re
 import string
@@ -12,6 +11,10 @@ DEFAULT_VAULT_PATH = Path("data")
 
 
 # ── Low-level helpers ─────────────────────────────────────────────────────────
+
+
+def filename_to_node_id(filename: str) -> str:
+    return filename.split("_")[0].upper()
 
 
 def _generate_id(length: int = 6) -> str:
@@ -65,6 +68,35 @@ def save_node_fields(node: "Node") -> None:
 # ── Vault-level I/O ───────────────────────────────────────────────────────────
 
 
+def load_vault(vault_path: Path) -> "NodeGraph":
+    """Load all nodes and links from YAML files in vault_path. Returns a NodeGraph."""
+    from pfq.model import Link, Node, NodeGraph
+
+    graph = NodeGraph()
+    for path in sorted(vault_path.glob("*.yaml")):
+        node_id = filename_to_node_id(path.stem)
+        raw = yaml.safe_load(path.read_text()) or {}
+        graph.nodes[node_id] = Node(
+            node_id=node_id,
+            description=raw.get("description"),
+            type=raw.get("type"),
+            status=raw.get("status"),
+            filepath=str(path),
+        )
+
+    for path in sorted(vault_path.glob("*.yaml")):
+        parent_id = filename_to_node_id(path.stem)
+        raw = yaml.safe_load(path.read_text()) or {}
+        for entry in raw.get("how") or []:
+            if isinstance(entry, dict) and "target_node" in entry:
+                child_id = filename_to_node_id(entry["target_node"])
+                if child_id in graph.nodes:
+                    graph.links.add(Link(parent_id, child_id))
+                    graph._child_order.setdefault(parent_id, []).append(child_id)
+
+    return graph
+
+
 def save_vault(graph: "NodeGraph") -> None:
     """Sync the full graph topology to disk.
 
@@ -72,8 +104,6 @@ def save_vault(graph: "NodeGraph") -> None:
     in-memory links. All other fields (description, type, status, unknown keys)
     are preserved unchanged.
     """
-    from pfq.model import filename_to_node_id
-
     for node in graph.nodes.values():
         path = Path(node.filepath)
         raw = yaml.safe_load(path.read_text()) or {}
