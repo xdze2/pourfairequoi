@@ -124,6 +124,14 @@ how     └─ grandchild          task        todo
 
 Pressing `e` opens a modal for the currently focused cell only. Type selection auto-saves on choice.
 
+#### Linking
+| Key | Action |
+|---|---|
+| `a` | Add a child node at the cursor position |
+| `z` | Link the focused node to a parent (search existing or create new) |
+
+`z` opens a search modal: type to fuzzy-search nodes, pick one to link as a parent, or confirm the query to create a new parent node on the fly.
+
 ### CLI
 
 ```bash
@@ -143,7 +151,8 @@ Built with Python:
 - [x] Data model + graph traversal (`model.py`)
 - [x] TUI — view only: home page, subgraph view, keyboard navigation
 - [x] Node editing — update fields (description, type, status)
-- [ ] Node editing — create node, add/remove links
+- [x] Node editing — create child node (`a`), link to parent (`z`)
+- [ ] Node editing — remove links, move nodes
 - [ ] Search / filter on home page
 
 ## Setup

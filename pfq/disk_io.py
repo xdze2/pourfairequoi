@@ -37,7 +37,7 @@ def _new_filepath(description: str, vault: Path) -> Path:
 
 def create_node(description: str, vault: Path) -> "Node":
     """Create a new YAML file and return the Node (not yet linked to anything)."""
-    from pfq.model import Node, filename_to_node_id
+    from pfq.model import Node
 
     path = _new_filepath(description, vault)
     node_id = filename_to_node_id(path.stem)

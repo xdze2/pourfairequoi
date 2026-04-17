@@ -2,6 +2,30 @@ from dataclasses import dataclass
 from typing import List, NamedTuple
 
 
+def _fuzzy_score(query: str, target: str) -> int | None:
+    """Return a match score (higher = better) or None if query doesn't match target.
+
+    Subsequence match: every character of query must appear in order in target.
+    Bonus for consecutive runs of matching characters.
+    Both query and target should be pre-lowercased by the caller.
+    """
+    if not query:
+        return 0
+    qi = 0
+    score = 0
+    consecutive = 0
+    for ch in target:
+        if ch == query[qi]:
+            consecutive += 1
+            score += consecutive
+            qi += 1
+            if qi == len(query):
+                return score * 1000 - len(target)
+        else:
+            consecutive = 0
+    return None
+
+
 class Link(NamedTuple):
     parent_id: str
     child_id: str
@@ -80,6 +104,22 @@ class NodeGraph:
                     if nid not in visited
                 ]
         return result
+
+    def search_nodes(self, query: str) -> List["Node"]:
+        """Return nodes whose description matches query, ranked by fuzzy score.
+
+        Uses subsequence matching with consecutive-run bonus (no external deps).
+        Nodes with no description are excluded.
+        """
+        q = query.lower()
+        scored: list[tuple[int, Node]] = []
+        for node in self.nodes.values():
+            desc = node.description or ""
+            score = _fuzzy_score(q, desc.lower())
+            if score is not None:
+                scored.append((score, node))
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [node for _, node in scored]
 
     def get_parents_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
         return self._dfs_tree(node_id, self.get_parent_ids, max_depth)

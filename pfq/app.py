@@ -147,6 +147,138 @@ class DeleteModal(ModalScreen):
         self.dismiss(False)
 
 
+# ── Link modal ─────────────────────────────────────────────────────────────────
+
+class LinkModal(ModalScreen):
+    """Search existing nodes or create a new one, then link it as a parent."""
+
+    CSS = """
+    LinkModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+        width: 60;
+        height: auto;
+    }
+    #dialog Label {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    #results {
+        height: auto;
+        max-height: 12;
+        overflow-y: auto;
+        margin-top: 1;
+    }
+    #hint {
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "move_up", "Up"),
+        Binding("down", "move_down", "Down"),
+        Binding("enter", "confirm", "Confirm"),
+    ]
+
+    def __init__(self, current_node_id: str, graph: NodeGraph):
+        super().__init__()
+        self.current_node_id = current_node_id
+        self.graph = graph
+        self._matches: list[tuple[str, str]] = []  # [(node_id, description)]
+        self._selected: int = 0  # index into _matches, or -1 = "create new"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Link to parent — search or create")
+            yield Input(placeholder="Type to search…", id="widget")
+            yield DataTable(cursor_type="row", show_header=False, id="results")
+            yield Label("↑↓ select  Enter confirm  Esc cancel", id="hint")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#results", DataTable)
+        t.add_column("desc", width=54)
+        self.query_one("#widget", Input).focus()
+
+    def _update_results(self, query: str) -> None:
+        t = self.query_one("#results", DataTable)
+        t.clear()
+        self._matches = []
+        self._selected = 0
+
+        if query:
+            results = self.graph.search_nodes(query)
+            self._matches = [
+                (n.node_id, n.description or "")
+                for n in results
+                if n.node_id != self.current_node_id
+            ][:10]
+
+        for node_id, desc in self._matches:
+            t.add_row(Text(desc), key=node_id)
+
+        # Always add "create new" option at the bottom when query is non-empty
+        if query.strip():
+            t.add_row(Text(f'+ Create new: "{query.strip()}"', style="italic green"), key="__create__")
+            if not self._matches:
+                self._selected = -1  # default to create
+        self._highlight()
+
+    def _highlight(self) -> None:
+        t = self.query_one("#results", DataTable)
+        if t.row_count == 0:
+            return
+        row = len(self._matches) if self._selected == -1 else self._selected
+        row = max(0, min(row, t.row_count - 1))
+        t.move_cursor(row=row)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._update_results(event.value)
+
+    def action_move_up(self) -> None:
+        total = len(self._matches) + (1 if self._create_row_shown() else 0)
+        if total == 0:
+            return
+        idx = len(self._matches) if self._selected == -1 else self._selected
+        idx = (idx - 1) % total
+        self._selected = -1 if idx == len(self._matches) else idx
+        self._highlight()
+
+    def action_move_down(self) -> None:
+        total = len(self._matches) + (1 if self._create_row_shown() else 0)
+        if total == 0:
+            return
+        idx = len(self._matches) if self._selected == -1 else self._selected
+        idx = (idx + 1) % total
+        self._selected = -1 if idx == len(self._matches) else idx
+        self._highlight()
+
+    def _create_row_shown(self) -> bool:
+        query = self.query_one("#widget", Input).value.strip()
+        return bool(query)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_confirm()
+
+    def action_confirm(self) -> None:
+        query = self.query_one("#widget", Input).value.strip()
+        if self._selected == -1 and query:
+            # Create new node as parent
+            self.dismiss({"action": "create", "description": query})
+        elif self._matches and 0 <= self._selected < len(self._matches):
+            node_id, _ = self._matches[self._selected]
+            self.dismiss({"action": "link", "node_id": node_id})
+        elif not self._matches and not query:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Edit modal ─────────────────────────────────────────────────────────────────
 
 class EditModal(ModalScreen):
@@ -228,6 +360,7 @@ class PfqApp(App):
         Binding("escape", "go_back", "Back"),
         Binding("e", "edit_node", "Edit"),
         Binding("a", "append_node", "Append"),
+        Binding("z", "link_parent", "Link parent"),
         Binding("d", "delete_node", "Delete"),
     ]
 
@@ -418,6 +551,32 @@ class PfqApp(App):
         node = create_node(description, self.vault_path)
         self.graph.add_node(node)
         self.graph.link_child(self.current_node_id, node.node_id, position)
+        save_vault(self.graph)
+        self._show_node(self.current_node_id)
+
+    # ── Link parent ────────────────────────────────────────────────────────────
+
+    def action_link_parent(self) -> None:
+        """z — open LinkModal to attach a parent to the current node."""
+        if self.current_node_id is None:
+            return  # home view: no node to reparent
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key not in self.graph.nodes:
+            return
+        self.push_screen(LinkModal(row_key, self.graph), lambda result: self._on_link_parent_done(result, row_key))
+
+    def _on_link_parent_done(self, result: dict | None, child_id: str) -> None:
+        if result is None:
+            return
+        if result["action"] == "create":
+            parent = create_node(result["description"], self.vault_path)
+            self.graph.add_node(parent)
+            parent_id = parent.node_id
+        else:
+            parent_id = result["node_id"]
+
+        self.graph.link_child(parent_id, child_id, len(self.graph.get_children_ids(parent_id)))
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 

@@ -58,6 +58,16 @@ After dismiss, `_on_edit_done` calls `setattr(node, attr, value)` then `save_nod
 
 To add a new editable field: add one entry to `FIELDS` in `config.py`. No changes needed elsewhere.
 
+## Linking (`z` key — `LinkModal`)
+
+`z` on any node row opens `LinkModal(current_node_id, graph)`. The modal lets the user:
+- **Search** existing nodes with fuzzy subsequence matching (`_fuzzy_score` — no external deps)
+- **Create** a new node on the fly (always shown as the last row when query is non-empty)
+
+On confirm, `_on_link_parent_done` calls `graph.link_child(parent_id, child_id, position)` then `save_vault(graph)`.
+
+The fuzzy scorer (`_fuzzy_score`) is a pure-Python subsequence match with consecutive-run bonus — O(n) per candidate, no deps. Returns `None` if query doesn't match, else `score * 1000 - len(target)` (tight matches rank higher).
+
 ## TUI row notation (`app.py`)
 
 Tree rows use three semantic roles: `"parent"`, `"selected"`, `"child"`.
