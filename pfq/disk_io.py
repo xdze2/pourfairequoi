@@ -11,7 +11,7 @@ import yaml
 DEFAULT_VAULT_PATH = Path("data")
 
 
-# ── Low-level file I/O (private helpers) ─────────────────────────────────────
+# ── Low-level helpers ─────────────────────────────────────────────────────────
 
 
 def _generate_id(length: int = 6) -> str:
@@ -29,34 +29,18 @@ def _new_filepath(description: str, vault: Path) -> Path:
     return vault / f"{_generate_id()}_{_slugify(description)}.yaml"
 
 
+# ── Node file operations ──────────────────────────────────────────────────────
+
+
 def create_node(description: str, vault: Path) -> "Node":
     """Create a new YAML file and return the Node (not yet linked to anything)."""
-    from pfq.model import Node, filename_to_node_id  # local import to avoid circular
+    from pfq.model import Node, filename_to_node_id
 
     path = _new_filepath(description, vault)
     node_id = filename_to_node_id(path.stem)
     raw = {"description": description}
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
     return Node(node_id=node_id, description=description, filepath=str(path))
-
-
-def add_child_link(parent_node: "Node", child_id: str, position: int) -> None:
-    """Insert child_id into parent's how list at position and save."""
-    path = Path(parent_node.filepath)
-    raw = yaml.safe_load(path.read_text()) or {}
-    how = raw.get("how") or []
-    how.insert(position, {"target_node": child_id})
-    raw["how"] = how
-    path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
-
-
-def remove_child_link(parent_node: "Node", child_id: str) -> None:
-    """Remove all how entries pointing to child_id from parent and save."""
-    path = Path(parent_node.filepath)
-    raw = yaml.safe_load(path.read_text()) or {}
-    how = raw.get("how") or []
-    raw["how"] = [e for e in how if e.get("target_node") != child_id]
-    path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
 
 
 def delete_node_file(node: "Node") -> None:
@@ -67,8 +51,6 @@ def delete_node_file(node: "Node") -> None:
 def save_node_fields(node: "Node") -> None:
     """Persist description, type, status back to the node's YAML file.
     The 'how' links and any unknown fields are preserved as-is."""
-    from pfq.model import Node  # local import to avoid circular
-
     path = Path(node.filepath)
     raw = yaml.safe_load(path.read_text()) or {}
     for field in ("description", "type", "status"):
@@ -78,3 +60,34 @@ def save_node_fields(node: "Node") -> None:
         else:
             raw.pop(field, None)
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
+
+
+# ── Vault-level I/O ───────────────────────────────────────────────────────────
+
+
+def save_vault(graph: "NodeGraph") -> None:
+    """Sync the full graph topology to disk.
+
+    For each node, rewrites its YAML file's 'how' list to match the current
+    in-memory links. All other fields (description, type, status, unknown keys)
+    are preserved unchanged.
+    """
+    from pfq.model import filename_to_node_id
+
+    for node in graph.nodes.values():
+        path = Path(node.filepath)
+        raw = yaml.safe_load(path.read_text()) or {}
+
+        children = graph.get_node_children(node.node_id)
+        if children:
+            # Use the filename stem as the target_node value (matches load format)
+            child_stems = {}
+            for other in graph.nodes.values():
+                stem = Path(other.filepath).stem
+                child_stems[other.node_id] = stem
+
+            raw["how"] = [{"target_node": child_stems[cid]} for cid in children]
+        else:
+            raw.pop("how", None)
+
+        path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))

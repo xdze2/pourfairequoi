@@ -28,14 +28,14 @@ def test_node_fields(graph):
     assert node.status == "active"
 
 
-def test_node_how_children(graph):
-    node = graph.get_node("AA0001")
-    assert node.how == ["AB0002", "AB0003"]
+def test_node_children(graph):
+    children = graph.get_node_children("AA0001")
+    assert children == ["AB0002", "AB0003"]
 
 
 def test_node_no_children(graph):
-    node = graph.get_node("AC0003")
-    assert node.how == []
+    children = graph.get_node_children("AC0003")
+    assert children == []
 
 
 # ── Why (derived, reversed how) ───────────────────────────────────────────────

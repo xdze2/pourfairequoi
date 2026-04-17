@@ -11,11 +11,10 @@ from textual.widgets import DataTable, Footer, Input, Label, Select
 from pfq.config import FIELDS
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
-    add_child_link,
     create_node,
     delete_node_file,
-    remove_child_link,
     save_node_fields,
+    save_vault,
 )
 from pfq.model import Node, NodeGraph
 
@@ -417,9 +416,8 @@ class PfqApp(App):
             return
         node = create_node(description, self.vault_path)
         self.graph.add_node(node)
-        parent_node = self.graph.get_node(self.current_node_id)
         self.graph.link_child(self.current_node_id, node.node_id, position)
-        add_child_link(parent_node, node.node_id, position)
+        save_vault(self.graph)
         self._show_node(self.current_node_id)
 
     # ── Delete ─────────────────────────────────────────────────────────────────
@@ -439,13 +437,10 @@ class PfqApp(App):
         if not confirmed:
             return
         node = self.graph.get_node(node_id)
-        # Remove links from all parents
-        for parent_id in list(self.graph.get_node_parents(node_id)):
-            remove_child_link(self.graph.get_node(parent_id), node_id)
-        delete_node_file(node)
-        # If we're deleting the currently viewed node, go back
         navigating_away = (node_id == self.current_node_id)
         self.graph.remove_node(node_id)
+        save_vault(self.graph)
+        delete_node_file(node)
         if navigating_away:
             if self.history:
                 prev = self.history.pop()
