@@ -1,43 +1,27 @@
 # Append parent node — problem & options
 
-## Current state
+## Status: implemented (`z` key)
 
-`a` creates a child of the selected node (or a root if on home view).
-It is intentionally a no-op on parent rows, because creating a parent is
-structurally different from creating a child:
+`z` on any node row opens `LinkModal` — fuzzy search existing nodes or create a new one,
+then links it as a parent of the focused node.
 
-- Creating a child: write a new file + insert a `how` link in the current node. Simple.
-- Creating a parent: write a new file + insert the current node as a `how` child of the new node.
-  But then who is the parent of the new parent? It becomes a root unless we also re-link.
+## What was implemented
 
-## The real difficulty
+- `z` → `LinkModal(focused_node_id, graph)`
+- Fuzzy subsequence search via `NodeGraph.search_nodes(query)` (in `model.py`, no external deps)
+- Results update live as you type; ↑↓ to navigate
+- Last row always offers `+ Create new: "…"` when query is non-empty
+- Enter confirms, Esc cancels
+- On confirm: `graph.link_child(parent_id, child_id, ...)` + `save_vault(graph)`
 
-Adding a parent node to an existing node can silently restructure the graph:
-- If the current node is a root, the new parent becomes a root and the current node
-  loses its root status — fine.
-- If the current node already has parents, the new node needs to be inserted *between*
-  them and the current node, which means modifying multiple existing nodes' `how` lists.
-  That is closer to "move / re-link" than "append".
+## What was decided
 
-## Options considered
+- Multi-parent is allowed (DAG); no cycle detection needed (DFS has a visited set)
+- New parent created via the modal becomes a root unless it already exists in the graph
+- "Insert between existing parents" (option C from original doc) deferred to a future
+  "move / re-link" feature
 
-### A. Separate key (e.g. `A` / shift-a) — "add parent"
-- Creates a new node and adds current node to its `how` list.
-- The new parent becomes a root (no grandparent assigned).
-- Simple to implement, but leaves the user to manually re-link if needed.
+## Next step
 
-### B. Navigate first, then `a`
-- The user navigates to the intended future parent, presses `a`, and types the
-  description. The new node becomes a child of *that* parent.
-- Then the user links the original node under the new one manually (once link-editing exists).
-- No new key needed, but the workflow is indirect.
-
-### C. Dedicated "reparent" flow (later, with link editing)
-- Wait until "modify links / move node" is implemented.
-- At that point, creating a parent and re-linking become the same operation.
-- Cleanest long-term solution.
-
-## Recommendation
-
-Short term: implement option A (`A` key = add parent, becomes a root).
-Long term: supersede with option C once link editing exists.
+Full link editing (remove links, move nodes) — will supersede the manual workaround
+of creating a parent then re-linking.
