@@ -1,5 +1,7 @@
 description: Minimal and usable set of features
 how:
+- target_node: RYDES6_global_search
+- target_node: TKHN53_show_2ndary_links
 - target_node: 4YOI71_delete_link_vs_delete_node
 - target_node: XJ228R_refactor_internal_code
 - target_node: 75MI79_add_node
