@@ -78,7 +78,7 @@ def save_vault(graph: "NodeGraph") -> None:
         path = Path(node.filepath)
         raw = yaml.safe_load(path.read_text()) or {}
 
-        children = graph.get_node_children(node.node_id)
+        children = graph.get_children_ids(node.node_id)
         if children:
             # Use the filename stem as the target_node value (matches load format)
             child_stems = {}

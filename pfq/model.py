@@ -59,15 +59,13 @@ class NodeGraph:
     def get_node(self, node_id: str) -> Node:
         return self.nodes[node_id]
 
-    def get_node_parents(self, node_id: str) -> List[str]:
+    def get_parent_ids(self, node_id: str) -> List[str]:
+        """Return the IDs of all direct parents of node_id."""
         return [lnk.parent_id for lnk in self.links if lnk.child_id == node_id]
 
-    def get_node_children(self, node_id: str) -> List[str]:
+    def get_children_ids(self, node_id: str) -> List[str]:
+        """Return the IDs of all direct children of node_id, in insertion order."""
         return self._child_order.get(node_id, [])
-
-    # Alias for callers that used the old name
-    def get_node_childrens(self, node_id: str) -> List[str]:
-        return self.get_node_children(node_id)
 
     def add_node(self, node: "Node") -> None:
         self.nodes[node.node_id] = node
@@ -117,7 +115,7 @@ class NodeGraph:
         return result
 
     def get_parents_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
-        return self._dfs_tree(node_id, self.get_node_parents, max_depth)
+        return self._dfs_tree(node_id, self.get_parent_ids, max_depth)
 
     def get_childrens_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
-        return self._dfs_tree(node_id, self.get_node_children, max_depth)
+        return self._dfs_tree(node_id, self.get_children_ids, max_depth)

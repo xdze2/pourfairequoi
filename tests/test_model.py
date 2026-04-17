@@ -29,12 +29,12 @@ def test_node_fields(graph):
 
 
 def test_node_children(graph):
-    children = graph.get_node_children("AA0001")
+    children = graph.get_children_ids("AA0001")
     assert children == ["AB0002", "AB0003"]
 
 
 def test_node_no_children(graph):
-    children = graph.get_node_children("AC0003")
+    children = graph.get_children_ids("AC0003")
     assert children == []
 
 
@@ -43,18 +43,18 @@ def test_node_no_children(graph):
 
 def test_why_single_parent(graph):
     # AB0002 is only a child of AA0001
-    parents = graph.get_node_parents("AB0002")
+    parents = graph.get_parent_ids("AB0002")
     assert parents == ["AA0001"]
 
 
 def test_why_shared_node(graph):
     # ZZ0001 is a child of both AB0003 and BB0002
-    parents = graph.get_node_parents("ZZ0001")
+    parents = graph.get_parent_ids("ZZ0001")
     assert set(parents) == {"AB0003", "BB0002"}
 
 
 def test_why_root_has_no_parents(graph):
-    parents = graph.get_node_parents("AA0001")
+    parents = graph.get_parent_ids("AA0001")
     assert parents == []
 
 

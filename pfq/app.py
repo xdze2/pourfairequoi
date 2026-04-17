@@ -382,7 +382,7 @@ class PfqApp(App):
             return
 
         # Determine insertion position among current node's children
-        children_ids = self.graph.get_node_childrens(self.current_node_id)
+        children_ids = self.graph.get_children_ids(self.current_node_id)
         if row_key == self.current_node_id:
             position = 0
         else:
