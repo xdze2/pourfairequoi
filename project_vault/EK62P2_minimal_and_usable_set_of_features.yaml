@@ -1,0 +1,9 @@
+description: Minimal and usable set of features
+how:
+- target_node: 4YOI71_delete_link_vs_delete_node
+- target_node: XJ228R_refactor_internal_code
+- target_node: 75MI79_add_node
+- target_node: 02MNF2_add_parent_node
+- target_node: U3XDUD_delete_node
+- target_node: TB5TUH_re_order_child_node
+- target_node: 0NOK59_home_page_clean_roots_view

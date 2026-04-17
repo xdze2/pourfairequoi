@@ -1,0 +1,9 @@
+description: Version 1
+how:
+- target_node: 0HPOJY_clean_docs_and_meta
+- target_node: XSDBJZ_screenshots
+- target_node: GTC913_clean_code
+- target_node: 7VUH6G_polish_features_as_much_as_possible
+- target_node: 0NOK59_home_page_clean_roots_view
+- target_node: EK62P2_minimal_and_usable_set_of_features
+- target_node: TB5TUH_re_order_child_node
