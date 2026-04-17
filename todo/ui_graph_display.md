@@ -91,3 +91,30 @@ immediately so the intent ("pick from a list") is clear.
 2. LinkModal shows candidates on open (quick fix)
 3. `u` unlink action + modal
 4. Inline `←` annotation on child rows
+
+
+
+## Example from project_vault
+
+
+Nice — the project is eating its own dog food, which is exactly right.
+
+A few observations:
+
+Graph health
+
+XSDBJZ_screenshots is linked from two places: 0HPOJY_clean_docs_and_meta and BR2NC6_version_1 and GTC913_clean_code — that's exactly the multi-parent case your ← annotation would expose
+0NOK59_home_page_clean_roots_view and TB5TUH_re_order_child_node appear as children of both BR2NC6_version_1 and EK62P2_minimal_and_usable_set_of_features — diamond pattern, transitive link
+75MI79_add_node (done) and U3XDUD_delete_node (done) are done but still linked — normal, just historical
+Content gaps
+
+02MNF2_add_parent_node is todo but the feature was just implemented (z key) — could be marked done
+4YOI71_delete_link_vs_delete_node has no status — the design decision was made this session (u for unlink), worth noting
+Several nodes have no type or status at all — they're raw captures, which is fine for a brain dump
+Structure
+
+ASEMU4_test_parent looks like a test node left over from experimentation — probably deletable
+MOANE9_past_v1 with SX51IR and 1TXEQZ under it feels like a backlog/parking lot — clear intent
+
+
+It's a healthy graph for a young project. The multi-parent diamonds are real and meaningful (shared tasks across goals), not accidents.
