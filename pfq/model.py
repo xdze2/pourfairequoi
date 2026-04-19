@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Optional
 
 
-def _fuzzy_score(query: str, target: str) -> int | None:
+def _fuzzy_score(query: str, target: str) -> Optional[int]:
     """Return a match score (higher = better) or None if query doesn't match target.
 
     Subsequence match: every character of query must appear in order in target.

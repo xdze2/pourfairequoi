@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import List, Literal, Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -327,7 +327,7 @@ class EditModal(ModalScreen):
     def on_mount(self) -> None:
         self.query_one("#widget").focus()
 
-    def _dismiss_with_value(self, value: str | None) -> None:
+    def _dismiss_with_value(self, value: Optional[str]) -> None:
         self.dismiss({"attr": self.field["attr"], "value": value or None})
 
     # text field: Enter submits
@@ -368,8 +368,8 @@ class PfqApp(App):
         super().__init__()
         self.vault_path = vault_path
         self.graph = load_vault(vault_path)
-        self.current_node_id: str | None = None
-        self.history: list[str | None] = []
+        self.current_node_id: Optional[str] = None
+        self.history: List[Optional[str]] = []
 
     def compose(self) -> ComposeResult:
         table = DataTable(cursor_type="cell", show_header=False)
@@ -479,7 +479,7 @@ class PfqApp(App):
         node = self.graph.get_node(row_key)
         self.push_screen(EditModal(node, col_key), self._on_edit_done)
 
-    def _on_edit_done(self, result: dict | None) -> None:
+    def _on_edit_done(self, result: Optional[dict]) -> None:
         if result is None:
             return
         # result = {"attr": "description"|"type"|"status", "value": str|None}
@@ -538,14 +538,14 @@ class PfqApp(App):
         label = parent_node.description or self.current_node_id
         self.push_screen(CreateModal(label), lambda desc: self._on_create_child(desc, position))
 
-    def _on_create_root(self, description: str | None) -> None:
+    def _on_create_root(self, description: Optional[str]) -> None:
         if not description:
             return
         node = create_node(description, self.vault_path)
         self.graph.add_node(node)
         self._show_home()
 
-    def _on_create_child(self, description: str | None, position: int) -> None:
+    def _on_create_child(self, description: Optional[str], position: int) -> None:
         if not description:
             return
         node = create_node(description, self.vault_path)
@@ -566,7 +566,7 @@ class PfqApp(App):
             return
         self.push_screen(LinkModal(row_key, self.graph), lambda result: self._on_link_parent_done(result, row_key))
 
-    def _on_link_parent_done(self, result: dict | None, child_id: str) -> None:
+    def _on_link_parent_done(self, result: Optional[dict], child_id: str) -> None:
         if result is None:
             return
         if result["action"] == "create":
