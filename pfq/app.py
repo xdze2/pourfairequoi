@@ -30,8 +30,6 @@ PALETTE = {
 
 NodeRole = Literal["parent", "selected", "child"]
 
-_ROLE_BOUNDARY_LABEL = {"parent": "why", "child": "how"}
-
 
 def _rich(text: str, depth: int) -> Text:
     """Plain string → Rich Text with depth styling: 0 → bold, 2 → dim, else plain."""
@@ -59,10 +57,12 @@ def _status_rich(status: str, depth: int) -> Text:
 def _margin_cell(role: NodeRole, boundary: bool) -> str:
     if role == "selected":
         return "▶"
-    return _ROLE_BOUNDARY_LABEL[role] if boundary else "│"
+    return " "
 
 
-def _tree_prefix_segments(depth: int, index: int, items: list, *, reverse: bool = False) -> list[tuple[str, int]]:
+def _tree_prefix_segments(
+    depth: int, index: int, items: list, *, reverse: bool = False
+) -> list[tuple[str, int]]:
     """Return prefix as a list of (text, level) segments for independent styling.
 
     Each segment's level indicates which depth it belongs to (for styling).
@@ -89,13 +89,17 @@ def _tree_prefix_segments(depth: int, index: int, items: list, *, reverse: bool 
     return segments
 
 
-def _desc_cell(role: NodeRole, depth: int, node: Node, index: int = 0, items: list = ()) -> Text:
+def _desc_cell(
+    role: NodeRole, depth: int, node: Node, index: int = 0, items: list = ()
+) -> Text:
     raw = node.description or ""
     if role == "selected":
         return _rich(raw, depth)
 
     t = Text()
-    for seg, lvl in _tree_prefix_segments(depth, index, list(items), reverse=(role == "parent")):
+    for seg, lvl in _tree_prefix_segments(
+        depth, index, list(items), reverse=(role == "parent")
+    ):
         style = "dim" if lvl >= 2 else ""
         t.append(seg, style=style)
     # node description styled at its own depth
@@ -439,8 +443,8 @@ class PfqApp(App):
         yield Static(
             f"[bold reverse] p f q [/]  {self.vault_path.name}/", id="app-header"
         )
-        table = DataTable(cursor_type="cell", show_header=False)
-        table.add_column("", key="margin", width=4)
+        table = DataTable(cursor_type="cell", show_header=True)
+        table.add_column("", key="margin", width=1)
         table.add_column("description", key="desc", width=44)
         table.add_column("type", key="type", width=12)
         table.add_column("status", key="status", width=10)
@@ -503,7 +507,9 @@ class PfqApp(App):
 
         # Parents — farthest first; farthest gets "why" boundary label
         for i, (node, depth) in enumerate(parents):
-            self._add_row("parent", depth, node, boundary=(i == 0), index=i, items=parents)
+            self._add_row(
+                "parent", depth, node, boundary=(i == 0), index=i, items=parents
+            )
 
         # Current node
         self._add_row("selected", 0, self.graph.get_node(node_id))
@@ -515,13 +521,17 @@ class PfqApp(App):
         filtered_children = [(n, d) for n, d in children if n.node_id not in seen]
         for i, (node, depth) in enumerate(filtered_children):
             self._add_row(
-                "child", depth, node,
+                "child",
+                depth,
+                node,
                 boundary=(i == len(filtered_children) - 1),
                 index=i,
                 items=filtered_children,
             )
 
-        t.move_cursor(row=cursor_row if cursor_row is not None else selected_row, column=col)
+        t.move_cursor(
+            row=cursor_row if cursor_row is not None else selected_row, column=col
+        )
 
     # ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -687,7 +697,9 @@ class PfqApp(App):
             return
         # find which visible parent owns this node as a direct child
         parent_id = None
-        for candidate in [self.current_node_id] + self.graph.get_children_ids(self.current_node_id):
+        for candidate in [self.current_node_id] + self.graph.get_children_ids(
+            self.current_node_id
+        ):
             if row_key in self.graph.get_children_ids(candidate):
                 parent_id = candidate
                 break
@@ -706,7 +718,9 @@ class PfqApp(App):
             return
         new_pos = child_ids.index(row_key)
         parents_count = len(parents)
-        self._show_node(self.current_node_id, cursor_row=1 + parents_count + 1 + new_pos)
+        self._show_node(
+            self.current_node_id, cursor_row=1 + parents_count + 1 + new_pos
+        )
 
     def action_reorder_up(self) -> None:
         self._action_reorder(-1)
@@ -719,7 +733,9 @@ class PfqApp(App):
     def _visible_parent_of(self, node_id: str) -> Optional[str]:
         """Return the ID of the node that is the visible parent of node_id in the
         current view (i.e. the node whose how-link draws the tree connector)."""
-        for candidate in [self.current_node_id] + self.graph.get_children_ids(self.current_node_id):
+        for candidate in [self.current_node_id] + self.graph.get_children_ids(
+            self.current_node_id
+        ):
             if node_id in self.graph.get_children_ids(candidate):
                 return candidate
         return None
@@ -729,7 +745,10 @@ class PfqApp(App):
             return
         t = self._table()
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
-        if row_key in (self.current_node_id, "__home__") or row_key not in self.graph.nodes:
+        if (
+            row_key in (self.current_node_id, "__home__")
+            or row_key not in self.graph.nodes
+        ):
             return
         parent_id = self._visible_parent_of(row_key)
         if parent_id is None:
@@ -741,7 +760,9 @@ class PfqApp(App):
             lambda confirmed: self._on_unlink_confirmed(confirmed, parent_id, row_key),
         )
 
-    def _on_unlink_confirmed(self, confirmed: bool, parent_id: str, child_id: str) -> None:
+    def _on_unlink_confirmed(
+        self, confirmed: bool, parent_id: str, child_id: str
+    ) -> None:
         if not confirmed:
             return
         self.graph.unlink_child(parent_id, child_id)
