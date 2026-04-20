@@ -422,7 +422,8 @@ class PfqApp(App):
         Binding("e", "edit_node", "Edit"),
         Binding("a", "append_node", "Append"),
         Binding("z", "link_parent", "Link parent"),
-        Binding("d", "delete_node", "Delete"),
+        Binding("d", "delete_link", "Unlink"),
+        Binding("D", "delete_node", "Delete node"),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
     ]
@@ -713,7 +714,39 @@ class PfqApp(App):
     def action_reorder_down(self) -> None:
         self._action_reorder(1)
 
-    # ── Delete ─────────────────────────────────────────────────────────────────
+    # ── Delete link / Delete node ───────────────────────────────────────────────
+
+    def _visible_parent_of(self, node_id: str) -> Optional[str]:
+        """Return the ID of the node that is the visible parent of node_id in the
+        current view (i.e. the node whose how-link draws the tree connector)."""
+        for candidate in [self.current_node_id] + self.graph.get_children_ids(self.current_node_id):
+            if node_id in self.graph.get_children_ids(candidate):
+                return candidate
+        return None
+
+    def action_delete_link(self) -> None:
+        if self.current_node_id is None:
+            return
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key in (self.current_node_id, "__home__") or row_key not in self.graph.nodes:
+            return
+        parent_id = self._visible_parent_of(row_key)
+        if parent_id is None:
+            return
+        parent_label = self.graph.get_node(parent_id).description or parent_id
+        child_label = self.graph.get_node(row_key).description or row_key
+        self.push_screen(
+            DeleteModal(f'{child_label}  (unlink from "{parent_label}")'),
+            lambda confirmed: self._on_unlink_confirmed(confirmed, parent_id, row_key),
+        )
+
+    def _on_unlink_confirmed(self, confirmed: bool, parent_id: str, child_id: str) -> None:
+        if not confirmed:
+            return
+        self.graph.unlink_child(parent_id, child_id)
+        save_vault(self.graph)
+        self._show_node(self.current_node_id)
 
     def action_delete_node(self) -> None:
         t = self._table()
