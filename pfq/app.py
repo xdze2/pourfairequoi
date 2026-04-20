@@ -62,12 +62,13 @@ def _margin_cell(role: NodeRole, boundary: bool) -> str:
 
 
 def _tree_prefix_segments(
-    depth: int, index: int, items: list, *, reverse: bool = False
+    depth: int, index: int, items: list, *, reverse: bool = False, bullet: str = ""
 ) -> list[tuple[str, int]]:
     """Return prefix as a list of (text, level) segments for independent styling.
 
     Each segment's level indicates which depth it belongs to (for styling).
     reverse=True is used for parent lists (displayed farthest-first, tree grows upward).
+    bullet replaces the trailing space of the terminal connector, e.g. '└──(' or '└──['.
     """
     depths = [d for (_, d) in items]
     scan = range(index - 1, -1, -1) if reverse else range(index + 1, len(items))
@@ -80,32 +81,51 @@ def _tree_prefix_segments(
                 return True
         return False
 
+    # terminal connector: replace trailing space with bullet (or keep space if no bullet)
+    end = bullet if bullet else " "
     segments: list[tuple[str, int]] = []
     for lvl in range(1, depth):
         segments.append(("│   " if has_sibling_at(lvl) else "    ", lvl))
     if reverse:
-        segments.append(("├── " if has_sibling_at(depth) else "┌── ", depth))
+        segments.append(("├──" + end if has_sibling_at(depth) else "╭──" + end, depth))
     else:
-        segments.append(("├── " if has_sibling_at(depth) else "└── ", depth))
+        segments.append(("├──" + end if has_sibling_at(depth) else "╰──" + end, depth))
     return segments
 
 
+def _node_bullet(node: Node, graph: NodeGraph, depth: int = 0) -> str:
+    """Return a single char bullet (or '' for depth-1 middle nodes):
+    - roots always '@', at any depth
+    - depth 1, non-root: '' (connector is enough, keeps alignment)
+    - depth 2+, non-root: '○' for leaf, '<' for middle
+    """
+    is_root = len(graph.get_parent_ids(node.node_id)) == 0
+    is_leaf = len(graph.get_children_ids(node.node_id)) == 0
+    if is_root:
+        return "@"
+    if depth <= 1:
+        return ""
+    return "○" if is_leaf else "<"
+
+
 def _desc_cell(
-    role: NodeRole, depth: int, node: Node, index: int = 0, items: list = ()
+    role: NodeRole, depth: int, node: Node, graph: NodeGraph, index: int = 0, items: list = ()
 ) -> Text:
+    bullet = _node_bullet(node, graph, depth)
     raw = node.description or ""
     if role == "selected":
-        return _rich(raw, depth)
+        return _rich(bullet + (" " if bullet else "") + raw, depth)
 
     t = Text()
     for seg, lvl in _tree_prefix_segments(
-        depth, index, list(items), reverse=(role == "parent")
+        depth, index, list(items), reverse=(role == "parent"), bullet=bullet
     ):
         style = "dim" if lvl >= 2 else ""
         t.append(seg, style=style)
-    # node description styled at its own depth
     desc_style = "bold" if depth == 0 else ("dim" if depth >= 2 else "")
-    t.append(raw, style=desc_style)
+    # when bullet is set, it replaces the connector's trailing space → add space before description
+    # when no bullet, connector already ends with a space → append description directly
+    t.append((" " if bullet else "") + raw, style=desc_style)
     return t
 
 
@@ -516,7 +536,7 @@ class PfqApp(App):
     ) -> None:
         self._table().add_row(
             _margin_cell(role, boundary),
-            _desc_cell(role, depth, node, index=index, items=items),
+            _desc_cell(role, depth, node, self.graph, index=index, items=items),
             _rich(node.type or "", depth),
             _status_rich(node.status or "", depth),
             key=node.node_id,
@@ -530,9 +550,10 @@ class PfqApp(App):
         t.clear()
         for node_id in sorted(self.graph.get_roots()):
             node = self.graph.get_node(node_id)
+            bullet = _node_bullet(node, self.graph, 0)
             t.add_row(
                 "",
-                _rich(node.description or "", 0),
+                _rich(bullet + (" " if bullet else "") + (node.description or ""), 0),
                 _rich(node.type or "", 0),
                 _status_rich(node.status or "", 0),
                 key=node.node_id,
