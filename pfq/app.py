@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, Label, Select
+from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
 from pfq.config import FIELDS
 from pfq.disk_io import (
@@ -23,14 +23,14 @@ INDENT = "   "  # per depth level
 
 # ── Color palette ──────────────────────────────────────────────────────────────
 PALETTE = {
-    "row_bg":  "#1c2d40",  # selected row  — dark slate-blue (reserved, not yet applied)
+    "row_bg": "#1c2d40",  # selected row  — dark slate-blue (reserved, not yet applied)
     "cell_bg": "#1a5276",  # cursor cell   — brighter blue
     "cell_fg": "#eaf2ff",  # cursor cell text — near-white
 }
 
 NodeRole = Literal["parent", "selected", "child"]
 
-_ROLE_CONNECTOR      = {"parent": "┌─", "child": "└─"}
+_ROLE_CONNECTOR = {"parent": "┌─", "child": "└─"}
 _ROLE_BOUNDARY_LABEL = {"parent": "why", "child": "how"}
 
 
@@ -60,6 +60,7 @@ def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
 
 
 # ── Create modal ──────────────────────────────────────────────────────────────
+
 
 class CreateModal(ModalScreen):
     """Prompt for a description, then dismiss with the string (or None on cancel)."""
@@ -103,6 +104,7 @@ class CreateModal(ModalScreen):
 
 
 # ── Delete modal ───────────────────────────────────────────────────────────────
+
 
 class DeleteModal(ModalScreen):
     """Confirmation prompt before deleting a node."""
@@ -148,6 +150,7 @@ class DeleteModal(ModalScreen):
 
 
 # ── Link modal ─────────────────────────────────────────────────────────────────
+
 
 class LinkModal(ModalScreen):
     """Search existing nodes or create a new one, then link it as a parent."""
@@ -223,7 +226,10 @@ class LinkModal(ModalScreen):
 
         # Always add "create new" option at the bottom when query is non-empty
         if query.strip():
-            t.add_row(Text(f'+ Create new: "{query.strip()}"', style="italic green"), key="__create__")
+            t.add_row(
+                Text(f'+ Create new: "{query.strip()}"', style="italic green"),
+                key="__create__",
+            )
             if not self._matches:
                 self._selected = -1  # default to create
         self._highlight()
@@ -280,6 +286,7 @@ class LinkModal(ModalScreen):
 
 
 # ── Edit modal ─────────────────────────────────────────────────────────────────
+
 
 class EditModal(ModalScreen):
     """Single-field edit modal. Driven by FIELDS config — no hardcoded field logic."""
@@ -346,12 +353,21 @@ class EditModal(ModalScreen):
 
 # ── Main app ───────────────────────────────────────────────────────────────────
 
+
 class PfqApp(App):
     TITLE = "pfq"
     CSS = f"""
     DataTable > .datatable--cursor {{
         background: {PALETTE['cell_bg']};
         color: {PALETTE['cell_fg']};
+    }}
+    #app-header {{
+        dock: top;
+        height: 1;
+        background: $panel;
+        color: $foreground;
+        content-align: left middle;
+        padding: 0 1;
     }}
     """
     BINDINGS = [
@@ -372,6 +388,9 @@ class PfqApp(App):
         self.history: List[Optional[str]] = []
 
     def compose(self) -> ComposeResult:
+        yield Static(
+            f"[bold reverse] p f q [/]  {self.vault_path.name}/", id="app-header"
+        )
         table = DataTable(cursor_type="cell", show_header=False)
         table.add_column("", key="margin", width=4)
         table.add_column("description", key="desc", width=44)
@@ -388,7 +407,9 @@ class PfqApp(App):
     def _table(self) -> DataTable:
         return self.query_one(DataTable)
 
-    def _add_row(self, role: NodeRole, depth: int, node: Node, *, boundary: bool = False) -> None:
+    def _add_row(
+        self, role: NodeRole, depth: int, node: Node, *, boundary: bool = False
+    ) -> None:
         self._table().add_row(
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node),
@@ -511,7 +532,9 @@ class PfqApp(App):
             return
 
         # Parent row: ignore
-        parents = [n.node_id for n, _ in self.graph.get_parents_tree(self.current_node_id)]
+        parents = [
+            n.node_id for n, _ in self.graph.get_parents_tree(self.current_node_id)
+        ]
         if row_key in parents:
             return
 
@@ -522,7 +545,10 @@ class PfqApp(App):
         else:
             # Find the top-level child at or above cursor
             # Walk children tree rows to locate which top-level child the cursor is under
-            child_rows = [n.node_id for n, _ in self.graph.get_childrens_tree(self.current_node_id)]
+            child_rows = [
+                n.node_id
+                for n, _ in self.graph.get_childrens_tree(self.current_node_id)
+            ]
             cursor_idx = child_rows.index(row_key) if row_key in child_rows else -1
             # Find the top-level child that contains or is the cursor row
             top_child = None
@@ -536,7 +562,9 @@ class PfqApp(App):
 
         parent_node = self.graph.get_node(self.current_node_id)
         label = parent_node.description or self.current_node_id
-        self.push_screen(CreateModal(label), lambda desc: self._on_create_child(desc, position))
+        self.push_screen(
+            CreateModal(label), lambda desc: self._on_create_child(desc, position)
+        )
 
     def _on_create_root(self, description: Optional[str]) -> None:
         if not description:
@@ -564,7 +592,10 @@ class PfqApp(App):
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
         if row_key not in self.graph.nodes:
             return
-        self.push_screen(LinkModal(row_key, self.graph), lambda result: self._on_link_parent_done(result, row_key))
+        self.push_screen(
+            LinkModal(row_key, self.graph),
+            lambda result: self._on_link_parent_done(result, row_key),
+        )
 
     def _on_link_parent_done(self, result: Optional[dict], child_id: str) -> None:
         if result is None:
@@ -576,7 +607,9 @@ class PfqApp(App):
         else:
             parent_id = result["node_id"]
 
-        self.graph.link_child(parent_id, child_id, len(self.graph.get_children_ids(parent_id)))
+        self.graph.link_child(
+            parent_id, child_id, len(self.graph.get_children_ids(parent_id))
+        )
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 
@@ -591,13 +624,16 @@ class PfqApp(App):
 
         node = self.graph.get_node(row_key)
         label = node.description or row_key
-        self.push_screen(DeleteModal(label), lambda confirmed: self._on_delete_confirmed(confirmed, row_key))
+        self.push_screen(
+            DeleteModal(label),
+            lambda confirmed: self._on_delete_confirmed(confirmed, row_key),
+        )
 
     def _on_delete_confirmed(self, confirmed: bool, node_id: str) -> None:
         if not confirmed:
             return
         node = self.graph.get_node(node_id)
-        navigating_away = (node_id == self.current_node_id)
+        navigating_away = node_id == self.current_node_id
         self.graph.remove_node(node_id)
         save_vault(self.graph)
         delete_node_file(node)
