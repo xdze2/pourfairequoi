@@ -30,7 +30,6 @@ PALETTE = {
 
 NodeRole = Literal["parent", "selected", "child"]
 
-_ROLE_CONNECTOR = {"parent": "┌─", "child": "└─"}
 _ROLE_BOUNDARY_LABEL = {"parent": "why", "child": "how"}
 
 
@@ -63,13 +62,46 @@ def _margin_cell(role: NodeRole, boundary: bool) -> str:
     return _ROLE_BOUNDARY_LABEL[role] if boundary else "│"
 
 
-def _desc_cell(role: NodeRole, depth: int, node: Node) -> Text:
+def _tree_prefix_segments(depth: int, index: int, items: list, *, reverse: bool = False) -> list[tuple[str, int]]:
+    """Return prefix as a list of (text, level) segments for independent styling.
+
+    Each segment's level indicates which depth it belongs to (for styling).
+    reverse=True is used for parent lists (displayed farthest-first, tree grows upward).
+    """
+    depths = [d for (_, d) in items]
+    scan = range(index - 1, -1, -1) if reverse else range(index + 1, len(items))
+
+    def has_sibling_at(lvl: int) -> bool:
+        for j in scan:
+            if depths[j] < lvl:
+                return False
+            if depths[j] == lvl:
+                return True
+        return False
+
+    segments: list[tuple[str, int]] = []
+    for lvl in range(1, depth):
+        segments.append(("│   " if has_sibling_at(lvl) else "    ", lvl))
+    if reverse:
+        segments.append(("├── " if has_sibling_at(depth) else "┌── ", depth))
+    else:
+        segments.append(("├── " if has_sibling_at(depth) else "└── ", depth))
+    return segments
+
+
+def _desc_cell(role: NodeRole, depth: int, node: Node, index: int = 0, items: list = ()) -> Text:
     raw = node.description or ""
     if role == "selected":
-        content = raw
-    else:
-        content = f"{INDENT * (depth - 1)}{_ROLE_CONNECTOR[role]} {raw}"
-    return _rich(content, depth)
+        return _rich(raw, depth)
+
+    t = Text()
+    for seg, lvl in _tree_prefix_segments(depth, index, list(items), reverse=(role == "parent")):
+        style = "dim" if lvl >= 2 else ""
+        t.append(seg, style=style)
+    # node description styled at its own depth
+    desc_style = "bold" if depth == 0 else ("dim" if depth >= 2 else "")
+    t.append(raw, style=desc_style)
+    return t
 
 
 # ── Create modal ──────────────────────────────────────────────────────────────
@@ -421,11 +453,18 @@ class PfqApp(App):
         return self.query_one(DataTable)
 
     def _add_row(
-        self, role: NodeRole, depth: int, node: Node, *, boundary: bool = False
+        self,
+        role: NodeRole,
+        depth: int,
+        node: Node,
+        *,
+        boundary: bool = False,
+        index: int = 0,
+        items: list = (),
     ) -> None:
         self._table().add_row(
             _margin_cell(role, boundary),
-            _desc_cell(role, depth, node),
+            _desc_cell(role, depth, node, index=index, items=items),
             _rich(node.type or "", depth),
             _status_rich(node.status or "", depth),
             key=node.node_id,
@@ -461,7 +500,7 @@ class PfqApp(App):
 
         # Parents — farthest first; farthest gets "why" boundary label
         for i, (node, depth) in enumerate(parents):
-            self._add_row("parent", depth, node, boundary=(i == 0))
+            self._add_row("parent", depth, node, boundary=(i == 0), index=i, items=parents)
 
         # Current node
         self._add_row("selected", 0, self.graph.get_node(node_id))
@@ -469,7 +508,12 @@ class PfqApp(App):
 
         # Children — closest first; last gets "how" boundary label
         for i, (node, depth) in enumerate(children):
-            self._add_row("child", depth, node, boundary=(i == len(children) - 1))
+            self._add_row(
+                "child", depth, node,
+                boundary=(i == len(children) - 1),
+                index=i,
+                items=children,
+            )
 
         t.move_cursor(row=selected_row, column=col)
 
