@@ -659,32 +659,33 @@ class PfqApp(App):
         if row_key in parents:
             return
 
-        # Determine insertion position among current node's children
-        children_ids = self.graph.get_children_ids(self.current_node_id)
+        # Determine actual parent and insertion position.
+        # If cursor is on a depth-1 child → parent is current_node_id, insert after it.
+        # If cursor is on a depth-2 child → parent is the depth-1 node above it.
+        # If cursor is on current node itself → parent is current_node_id, insert at 0.
         if row_key == self.current_node_id:
+            actual_parent_id = self.current_node_id
             position = 0
+        elif row_key in self.graph.get_children_ids(self.current_node_id):
+            # depth-1: insert after this child
+            siblings = self.graph.get_children_ids(self.current_node_id)
+            position = siblings.index(row_key) + 1
+            actual_parent_id = self.current_node_id
         else:
-            # Find the top-level child at or above cursor
-            # Walk children tree rows to locate which top-level child the cursor is under
-            child_rows = [
-                n.node_id
-                for n, _ in self.graph.get_childrens_tree(self.current_node_id)
-            ]
-            cursor_idx = child_rows.index(row_key) if row_key in child_rows else -1
-            # Find the top-level child that contains or is the cursor row
-            top_child = None
-            for i, cid in enumerate(children_ids):
-                subtree = {n.node_id for n, _ in self.graph.get_childrens_tree(cid)}
-                subtree.add(cid)
-                if row_key in subtree:
-                    top_child = i
+            # depth-2: find which depth-1 child owns this node
+            actual_parent_id = self.current_node_id
+            position = len(self.graph.get_children_ids(self.current_node_id))
+            for cid in self.graph.get_children_ids(self.current_node_id):
+                siblings = self.graph.get_children_ids(cid)
+                if row_key in siblings:
+                    actual_parent_id = cid
+                    position = siblings.index(row_key) + 1
                     break
-            position = (top_child + 1) if top_child is not None else len(children_ids)
 
-        parent_node = self.graph.get_node(self.current_node_id)
-        label = parent_node.description or self.current_node_id
+        parent_node = self.graph.get_node(actual_parent_id)
+        label = parent_node.description or actual_parent_id
         self.push_screen(
-            CreateModal(label), lambda desc: self._on_create_child(desc, position)
+            CreateModal(label), lambda desc: self._on_create_child(desc, position, actual_parent_id)
         )
 
     def _on_create_root(self, description: Optional[str]) -> None:
@@ -694,12 +695,12 @@ class PfqApp(App):
         self.graph.add_node(node)
         self._show_home()
 
-    def _on_create_child(self, description: Optional[str], position: int) -> None:
+    def _on_create_child(self, description: Optional[str], position: int, parent_id: str) -> None:
         if not description:
             return
         node = create_node(description, self.vault_path)
         self.graph.add_node(node)
-        self.graph.link_child(self.current_node_id, node.node_id, position)
+        self.graph.link_child(parent_id, node.node_id, position)
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 
