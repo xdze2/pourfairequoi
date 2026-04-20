@@ -9,7 +9,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
-from pfq.config import FIELDS, STATUS_STYLES
+from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_MISMATCH_BG, STATUS_STYLES
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
     create_node,
@@ -42,16 +42,27 @@ def _rich(text: str, depth: int) -> Text:
     return t
 
 
-def _status_rich(status: str, depth: int) -> Text:
-    """Like _rich() but also applies STATUS_STYLES color when the status is known."""
-    color = STATUS_STYLES.get(status.lower()) if status else None
+def _status_rich(status: str, depth: int, is_leaf: bool = False, is_root: bool = False) -> Text:
+    """Like _rich() but also applies STATUS_STYLES color when the status is known.
+    Applies a subtle background when status doesn't match the node's structural role."""
+    if not status:
+        return _rich("", depth)
+    s = status.lower()
+    color = STATUS_STYLES.get(s)
+    mismatch = (
+        (is_leaf and s in NODE_STATUSES) or
+        ((is_root or not is_leaf) and s in LEAF_STATUSES)
+    )
+    bg = f" on {STATUS_MISMATCH_BG}" if mismatch else ""
     if color:
         if depth == 0:
-            return Text.from_markup(f"[bold {color}]{status}[/]")
+            return Text.from_markup(f"[bold {color}{bg}]{status}[/]")
         elif depth == 2:
-            return Text.from_markup(f"[dim {color}]{status}[/]")
+            return Text.from_markup(f"[dim {color}{bg}]{status}[/]")
         else:
-            return Text.from_markup(f"[{color}]{status}[/]")
+            return Text.from_markup(f"[{color}{bg}]{status}[/]")
+    if mismatch:
+        return Text.from_markup(f"[on {STATUS_MISMATCH_BG}]{status}[/]")
     return _rich(status, depth)
 
 
@@ -534,11 +545,13 @@ class PfqApp(App):
         index: int = 0,
         items: list = (),
     ) -> None:
+        is_leaf = len(self.graph.get_children_ids(node.node_id)) == 0
+        is_root = len(self.graph.get_parent_ids(node.node_id)) == 0
         self._table().add_row(
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node, self.graph, index=index, items=items),
             _rich(node.type or "", depth),
-            _status_rich(node.status or "", depth),
+            _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root),
             key=node.node_id,
         )
 
@@ -551,11 +564,12 @@ class PfqApp(App):
         for node_id in sorted(self.graph.get_roots()):
             node = self.graph.get_node(node_id)
             bullet = _node_bullet(node, self.graph, 0)
+            is_leaf = len(self.graph.get_children_ids(node_id)) == 0
             t.add_row(
                 "",
                 _rich(bullet + (" " if bullet else "") + (node.description or ""), 0),
                 _rich(node.type or "", 0),
-                _status_rich(node.status or "", 0),
+                _status_rich(node.status or "", 0, is_leaf=is_leaf, is_root=True),
                 key=node.node_id,
             )
 

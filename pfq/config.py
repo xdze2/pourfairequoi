@@ -9,7 +9,18 @@ STATUS_STYLES: dict[str, str] = {
     "explore":  "#a98fc4",  # soft purple
     "on hold":  "#8a8a8a",  # grey
     "stuck":    "#c49a7a",  # warm terracotta
+    "doing":    "#7ab8d4",  # dusty blue
+    "waiting":  "#8a8a8a",  # grey
+    "archived": "#555555",  # dark grey
+    "someday":  "#a98fc4",  # soft purple
 }
+
+# Status values considered appropriate for each node role.
+LEAF_STATUSES   = {"todo", "doable", "doing", "done", "stuck", "waiting"}
+NODE_STATUSES   = {"active", "on hold", "archived", "someday"}
+
+# Subtle background applied to status cell when status doesn't match node role.
+STATUS_MISMATCH_BG = "#7a3a1a"  # bright warm orange-brown
 
 NODE_TYPES = [
     "goal",
