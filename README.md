@@ -1,168 +1,171 @@
 # PourFaireQuoi (pfq)
 
-PourFaireQuoi is a hierarchical todo list, yet another, but:
 Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
 
+It is a personal knowledge graph — a DAG of nodes where up-links mean generalization and down-links mean decomposition. Tasks are just leaf nodes. Goals are just roots.
 
-## Goals
+---
 
-- Break down projects into smaller steps
-- Identify what is stuck and why
-- Brain dump ideas without friction, then clarify them
+## Philosophy
 
-## Key design principles:
-- Local files for privacy and its exportable
-- Terminal-based, minimal UI
-- No required fields — capture first, refine later
-- One YAML file per node — git-friendly (readable diffs, version history)
-- Each node is a YAML file in the `data/` directory.
-- Filename format: `{node_id}_{readable_slug}.yaml`
-- `node_id` is the 6-character random prefix (e.g. `AB0002`). The slug is cosmetic — human-readable in file explorers, never used for resolution.
+**Goal: clarity. Means: structure.**
 
+A structure is not a permanent truth — it's how you currently think about something. It can and should evolve. The graph is a first-person instrument, not a universal ontology.
+
+A DAG is a superposition of trees, one per root. Each root is a **perspective anchor** — a seed that radiates meaning downward. The structural position of a node already tells you what kind of thing it is:
+
+- `@` **root** — a seed, a motivation, a point of view. Everything below it exists because of it.
+- middle node — structure, a category, a "how"
+- `○` **leaf** — an atom, an action, something that can be resolved
+
+See [philo.md](philo.md) for the full design thinking.
+
+---
 
 ## Data model
 
-### What a node encodes
+### Nodes and links
 
+A node is a single unit of thought — a goal, a project, a task, an idea, a constraint. All are the same data structure. The difference is semantic, carried by position in the graph.
 
-A node is a single unit of thought. It can represent any of:
-- a **goal** — long-horizon aspiration, no clear end condition
-- a **project** — bounded effort with a deliverable
-- a **task** — concrete, completable action
-- an **event** — something that happened (past-dated, status done)
-- a **question / decision** — a node whose output is a conclusion, not an artifact
-- a **milestone** — a marker in time, signals progress
-- a **constraint** — a fact that shapes decisions, not something you do
+Links are directional: `how` (downward, toward detail/decomposition) and `why` (upward, toward motivation/generalization, derived by reversing `how` links — never stored).
 
-All are the same data structure. The difference is semantic, carried by `type` and context.
+The graph is a DAG: a node can have multiple parents. This allows the same concept to belong to several perspectives simultaneously.
 
+### Node role (derived from structure)
+
+| Symbol | Role | Meaning |
+|--------|------|---------|
+| `@` | root | no parents — a perspective anchor |
+| (none) | middle | has both parents and children — structure |
+| `○` | leaf | no children — an actionable atom |
 
 ### Node status
 
-- free text
+Status is free text, but two vocabularies are suggested depending on the node's structural role:
 
-### Yaml file format
+**Leaf statuses** (actions):
+- `todo` — should be done
+- `doable` — could be done, not urgent
+- `doing` — work in progress
+- `done` — completed
+- `stuck` — blocked, unclear why
+- `waiting` — can't proceed, external dependency
+
+**Root/middle statuses** (concepts, goals):
+- `active` — currently relevant
+- `on hold` — paused
+- `archived` — no longer relevant
+- `someday` — maybe later
+
+Using a leaf status on a root/middle node (or vice versa) is highlighted with a background color — a soft signal, not an error.
+
+### YAML format
 
 ```yaml
-description: Build a vintage radio       # short title, used in list view
-type: project                            # see node types above
-status: active                           # see statuses above
+description: Build a vintage radio
+type: project                        # optional, legacy field
+status: active
 
 how:
-- target_node: KLOP45_get_the_case       # {node_id}_{slug} — slug is informational only
+- target_node: KLOP45_get_the_case
 - target_node: OAAP11_repair_capacitors
-
 ```
 
-Every `how` entry references a node via `target_node: {node_id}_{slug}`. The model resolves links using only the `node_id` prefix — the slug can go stale if a node is renamed without updating its incoming links, which is acceptable (use a linter to re-sync slugs).
+One YAML file per node in the vault directory. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-character random prefix used for link resolution — the slug is cosmetic.
 
+---
 
-### Link directions
+## UI
 
-**`how` — stored in the parent, points to children.**
-A parent declares what it is made of. Natural direction: a project lists its tasks.
+### Home page
 
-**`why` — derived at load time** by reversing `how` links across the store.
-"What does this node serve?" is answered by scanning which parents declared it as a child. Never stored — no duplication, no inconsistency.
+Shows all root nodes (`@`) with type and status.
 
+### Node view
 
-
-## Architecture
-
-Terminal-based, using Textual. All files are loaded into memory at startup.
+Shows the local neighbourhood of the selected node, capped at depth 2 in each direction:
 
 ```
-Disk <──> Model <──api──> UI
+─ root
+  ╭── grandparent
+  ├── parent
+▶ Current node
+  ├── child 1
+  │   ├──< middle grandchild
+  │   ╰──○ leaf grandchild
+  ╰──○ leaf child
 ```
 
-The model exposes two tree queries, both returning `[(Node, depth), ...]`:
-- `get_parents_tree(node_id, max_depth=2)` — DFS upward; depth 1 = immediate parent
-- `get_childrens_tree(node_id, max_depth=2)` — DFS downward; depth 1 = immediate child
-
-DFS pre-order with a visited set handles DAGs: a shared node appears once. Each node appears immediately before its subtree, so the output maps directly to a tree view. The UI reverses the parents list to display the most distant ancestor at the top.
-
-
-## UI: Subgraph views
-
-At startup shows a home page: all root nodes (no parents) with type and status chips.
-
-When a node is selected, shows its local neighbourhood capped at `max_depth=2` in each direction:
-
-```
-     - root
-why     ┌─ grandparent 2       goal        active
- │      ┌─ grandparent         goal        active
- │   ┌─ parent                 project     todo
- ▶   current node              task        active
- │   ├─ child 1                task        doable
- │   └─ child 2                task        done
-how     └─ grandchild          task        todo
-```
-
-- Left margin: `why`/`│`/`▶`/`│`/`how` shows position in the hierarchy
-- `root` line at the top — selectable, Enter navigates home
-- Type and status chips aligned in fixed-width columns to the right
-
+The tree connectors are rounded (`╰`, `╭`). Node role symbols are embedded in the connector terminal:
+- `@ ` prefix on home screen for roots
+- `──<` for middle nodes at depth 2
+- `──○` for leaf nodes at depth 2
+- depth 1 nodes have no bullet — the connector is enough
 
 ### Keyboard shortcuts
 
-#### Global
+#### Navigation
 | Key | Action |
-|---|---|
+|-----|--------|
 | `h` | Home page |
-| `esc` | Go back to previously selected node (navigation history) |
+| `Esc` | Go back |
 | `q` | Quit |
-| `↑` / `↓` | Navigate between nodes |
-| `Enter` | Select one node (or go home if on `root` line) |
+| `↑` / `↓` | Move cursor |
+| `Enter` | Open node |
 
 #### Editing
 | Key | Action |
-|---|---|
-| `e` | Edit the focused cell (description, type, or status) |
-| `Enter` | Save (text fields) |
-| `Esc` | Cancel |
+|-----|--------|
+| `e` | Edit focused cell (description, type, status) |
+| `a` | Add child node at cursor |
+| `z` | Link focused node to a parent (search or create) |
+| `d` | Unlink focused node from its visible parent |
+| `D` | Delete node |
+| `Shift+↑` / `Shift+↓` | Reorder children |
 
-Pressing `e` opens a modal for the currently focused cell only. Type selection auto-saves on choice.
+---
 
-#### Linking
-| Key | Action |
-|---|---|
-| `a` | Add a child node at the cursor position |
-| `z` | Link the focused node to a parent (search existing or create new) |
+## Architecture
 
-`z` opens a search modal: type to fuzzy-search nodes, pick one to link as a parent, or confirm the query to create a new parent node on the fly.
-
-### CLI
-
-```bash
-pfq                                          # open the TUI
+```
+Disk <──> Model <──> UI
 ```
 
+All YAML files are loaded into memory at startup into a `NodeGraph`. The UI never touches disk directly — all writes go through `disk_io`.
 
-## Tech
+Key files:
+- `pfq/model.py` — `Node` dataclass, `NodeGraph` (BFS/DFS traversal)
+- `pfq/disk_io.py` — load/save vault, create/delete nodes
+- `pfq/config.py` — status palettes, mismatch vocabularies
+- `pfq/app.py` — Textual TUI
 
-Built with Python:
-- Click
-- PyYAML
-- Textual (TUI framework, includes Rich)
-
-## Status
-
-- [x] Data model + graph traversal (`model.py`)
-- [x] TUI — view only: home page, subgraph view, keyboard navigation
-- [x] Node editing — update fields (description, type, status)
-- [x] Node editing — create child node (`a`), link to parent (`z`)
-- [ ] Node editing — remove links, move nodes
-- [ ] Search / filter on home page
+---
 
 ## Setup
 
 ```bash
 pip install -e .
-pfq
+pfq                        # open default vault (data/)
+pfq --vault path/to/vault  # open a specific vault
 ```
 
+---
+
+## Status
+
+- [x] Data model + graph traversal
+- [x] Home page + node view with tree connectors
+- [x] Node role symbols (`@`, `<`, `○`) integrated into connectors
+- [x] Status mismatch highlighting
+- [x] Node editing (description, type, status)
+- [x] Create child node, link to parent, unlink, delete
+- [x] Reorder children
+- [ ] Search / filter on home page
+- [ ] Node creation from home page (root node)
+
+---
 
 ## Credits
 
-Built with the assistance of [Claude](https://claude.ai) (Anthropic) — used as a coding assistant throughout the design and implementation of this project.
+Built with the assistance of [Claude](https://claude.ai) (Anthropic).
