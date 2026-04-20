@@ -8,7 +8,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 
-from pfq.config import FIELDS
+from pfq.config import FIELDS, STATUS_STYLES
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
     create_node,
@@ -42,6 +42,19 @@ def _rich(text: str, depth: int) -> Text:
     elif depth == 2:
         t.stylize("dim")
     return t
+
+
+def _status_rich(status: str, depth: int) -> Text:
+    """Like _rich() but also applies STATUS_STYLES color when the status is known."""
+    color = STATUS_STYLES.get(status.lower()) if status else None
+    if color:
+        if depth == 0:
+            return Text.from_markup(f"[bold {color}]{status}[/]")
+        elif depth == 2:
+            return Text.from_markup(f"[dim {color}]{status}[/]")
+        else:
+            return Text.from_markup(f"[{color}]{status}[/]")
+    return _rich(status, depth)
 
 
 def _margin_cell(role: NodeRole, boundary: bool) -> str:
@@ -414,7 +427,7 @@ class PfqApp(App):
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node),
             _rich(node.type or "", depth),
-            _rich(node.status or "", depth),
+            _status_rich(node.status or "", depth),
             key=node.node_id,
         )
 
@@ -430,7 +443,7 @@ class PfqApp(App):
                 "",
                 _rich(node.description or "", 0),
                 _rich(node.type or "", 0),
-                _rich(node.status or "", 0),
+                _status_rich(node.status or "", 0),
                 key=node.node_id,
             )
 
