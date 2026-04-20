@@ -3,6 +3,7 @@ from typing import List, Literal, Optional
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.coordinate import Coordinate
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
@@ -355,8 +356,20 @@ class EditModal(ModalScreen):
         color: $text-muted;
         margin-bottom: 1;
     }
+    #suggestions {
+        height: 1;
+        margin-top: 1;
+        color: $text-muted;
+    }
+    #hint {
+        color: $text-muted;
+        margin-top: 1;
+    }
     """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("tab", "pick_suggestion", "Pick", show=False),
+    ]
 
     def __init__(self, node: Node, col_key: str):
         super().__init__()
@@ -379,12 +392,36 @@ class EditModal(ModalScreen):
                 )
             else:
                 yield Input(value=current, id="widget")
+                if self.col_key == "status":
+                    yield Static("", id="suggestions")
+                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
+                else:
+                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
+        self._matches: list[str] = []
         self.query_one("#widget").focus()
+        if self.col_key == "status":
+            self._refresh_suggestions(getattr(self.node, self.field["attr"]) or "")
+
+    def _refresh_suggestions(self, query: str) -> None:
+        q = query.lower()
+        self._matches = [s for s in STATUS_STYLES if q in s]
+        t = Text()
+        for i, status in enumerate(self._matches):
+            if i:
+                t.append("  ")
+            color = STATUS_STYLES[status]
+            style = f"{color} underline" if i == 0 else color
+            t.append(status, style=style)
+        self.query_one("#suggestions", Static).update(t)
 
     def _dismiss_with_value(self, value: Optional[str]) -> None:
         self.dismiss({"attr": self.field["attr"], "value": value or None})
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if self.col_key == "status":
+            self._refresh_suggestions(event.value)
 
     # text field: Enter submits
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -395,6 +432,14 @@ class EditModal(ModalScreen):
         options = self.field.get("options", [])
         value = event.value if event.value in options else None
         self._dismiss_with_value(value)
+
+    def action_pick_suggestion(self) -> None:
+        # Tab picks the first match, or the one that exactly matches current input
+        inp = self.query_one("#widget", Input).value.strip().lower()
+        if not hasattr(self, "_matches") or not self._matches:
+            return
+        exact = [s for s in self._matches if s == inp]
+        self._dismiss_with_value(exact[0] if exact else self._matches[0])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -571,23 +616,26 @@ class PfqApp(App):
         if col_key not in FIELDS:
             return
         node = self.graph.get_node(row_key)
-        self.push_screen(EditModal(node, col_key), self._on_edit_done)
+        saved_row = t.cursor_coordinate.row
+        self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, saved_row))
 
-    def _on_edit_done(self, result: Optional[dict]) -> None:
+    def _on_edit_done(self, result: Optional[dict], cursor_row: int) -> None:
+        t = self._table()
         if result is None:
+            t.move_cursor(row=cursor_row)
+            t.focus()
             return
         # result = {"attr": "description"|"type"|"status", "value": str|None}
-        # We derive node_id from the current cursor (modal was opened from it)
-        t = self._table()
-        cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
-        node_id = str(cell_key.row_key.value)
-        node = self.graph.get_node(node_id)
+        # We derive node_id from the saved row, not the current cursor
+        row_key = str(t.coordinate_to_cell_key(Coordinate(cursor_row, 0)).row_key.value)
+        node = self.graph.get_node(row_key)
         setattr(node, result["attr"], result["value"])
         save_node_fields(node)
         if self.current_node_id is None:
             self._show_home()
         else:
-            self._show_node(self.current_node_id)
+            self._show_node(self.current_node_id, cursor_row=cursor_row)
+        t.focus()
 
     # ── Append ─────────────────────────────────────────────────────────────────
 
