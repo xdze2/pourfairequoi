@@ -507,12 +507,15 @@ class PfqApp(App):
         selected_row = 1 + len(parents)
 
         # Children — closest first; last gets "how" boundary label
-        for i, (node, depth) in enumerate(children):
+        # exclude nodes already shown as parents (cycle-like graphs)
+        seen = {node_id} | {n.node_id for n, _ in parents}
+        filtered_children = [(n, d) for n, d in children if n.node_id not in seen]
+        for i, (node, depth) in enumerate(filtered_children):
             self._add_row(
                 "child", depth, node,
-                boundary=(i == len(children) - 1),
+                boundary=(i == len(filtered_children) - 1),
                 index=i,
-                items=children,
+                items=filtered_children,
             )
 
         t.move_cursor(row=selected_row, column=col)
