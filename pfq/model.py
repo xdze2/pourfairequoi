@@ -67,6 +67,16 @@ class NodeGraph:
         if child_id not in order:
             order.insert(position, child_id)
 
+    def reorder_child(self, parent_id: str, child_id: str, delta: int) -> None:
+        """Move child_id up (delta=-1) or down (delta=+1) among its siblings."""
+        order = self._child_order.get(parent_id)
+        if not order or child_id not in order:
+            return
+        i = order.index(child_id)
+        j = i + delta
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+
     def unlink_child(self, parent_id: str, child_id: str) -> None:
         self.links.discard(Link(parent_id, child_id))
         if parent_id in self._child_order:

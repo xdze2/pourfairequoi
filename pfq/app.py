@@ -423,6 +423,8 @@ class PfqApp(App):
         Binding("a", "append_node", "Append"),
         Binding("z", "link_parent", "Link parent"),
         Binding("d", "delete_node", "Delete"),
+        Binding("shift+up", "reorder_up", "Move up", show=False),
+        Binding("shift+down", "reorder_down", "Move down", show=False),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -486,7 +488,7 @@ class PfqApp(App):
                 key=node.node_id,
             )
 
-    def _show_node(self, node_id: str) -> None:
+    def _show_node(self, node_id: str, *, cursor_row: Optional[int] = None) -> None:
         self.current_node_id = node_id
         t = self._table()
         col = t.cursor_coordinate.column  # preserve column across refresh
@@ -518,7 +520,7 @@ class PfqApp(App):
                 items=filtered_children,
             )
 
-        t.move_cursor(row=selected_row, column=col)
+        t.move_cursor(row=cursor_row if cursor_row is not None else selected_row, column=col)
 
     # ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -672,6 +674,44 @@ class PfqApp(App):
         )
         save_vault(self.graph)
         self._show_node(self.current_node_id)
+
+    # ── Reorder ────────────────────────────────────────────────────────────────
+
+    def _action_reorder(self, delta: int) -> None:
+        if self.current_node_id is None:
+            return
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key in (self.current_node_id, "__home__"):
+            return
+        # find which visible parent owns this node as a direct child
+        parent_id = None
+        for candidate in [self.current_node_id] + self.graph.get_children_ids(self.current_node_id):
+            if row_key in self.graph.get_children_ids(candidate):
+                parent_id = candidate
+                break
+        if parent_id is None:
+            return
+        self.graph.reorder_child(parent_id, row_key, delta)
+        save_vault(self.graph)
+        # find the new row index by scanning the flat children list _show_node will build
+        parents = list(reversed(self.graph.get_parents_tree(self.current_node_id)))
+        children = self.graph.get_childrens_tree(self.current_node_id)
+        seen = {self.current_node_id} | {n.node_id for n, _ in parents}
+        filtered_children = [(n, d) for n, d in children if n.node_id not in seen]
+        child_ids = [n.node_id for n, _ in filtered_children]
+        if row_key not in child_ids:
+            self._show_node(self.current_node_id)
+            return
+        new_pos = child_ids.index(row_key)
+        parents_count = len(parents)
+        self._show_node(self.current_node_id, cursor_row=1 + parents_count + 1 + new_pos)
+
+    def action_reorder_up(self) -> None:
+        self._action_reorder(-1)
+
+    def action_reorder_down(self) -> None:
+        self._action_reorder(1)
 
     # ── Delete ─────────────────────────────────────────────────────────────────
 
