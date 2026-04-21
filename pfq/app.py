@@ -8,6 +8,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, Select, Static
+from textual.containers import Horizontal
 
 from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_MISMATCH_BG, STATUS_STYLES
 from pfq.disk_io import (
@@ -366,6 +367,139 @@ class LinkModal(ModalScreen):
         self.dismiss(None)
 
 
+# ── Status modal ───────────────────────────────────────────────────────────────
+
+_ROOT_STATUSES  = sorted(NODE_STATUSES)
+_NODE_STATUSES  = sorted(NODE_STATUSES)
+_LEAF_STATUSES  = sorted(LEAF_STATUSES)
+
+_COLUMNS = [
+    ("@ root",  _ROOT_STATUSES),
+    ("< node",  _NODE_STATUSES),
+    ("○ leaf",  _LEAF_STATUSES),
+]
+
+
+class StatusModal(ModalScreen):
+    """Status editor: shows node description, three role columns, free-text input."""
+
+    CSS = """
+    StatusModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+        width: 62;
+        height: auto;
+    }
+    #modal-title {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    #node-desc {
+        margin-bottom: 1;
+    }
+    #widget {
+        border: tall $primary;
+        background: $panel;
+        margin-bottom: 1;
+    }
+    #columns {
+        height: auto;
+        margin-bottom: 1;
+    }
+    .col-header {
+        color: $text-disabled;
+        text-style: dim;
+        width: 1fr;
+    }
+    .col-body {
+        width: 1fr;
+        height: auto;
+    }
+    #hint {
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("tab", "pick_suggestion", "Pick", show=False),
+    ]
+
+    def __init__(self, node: Node, graph: NodeGraph):
+        super().__init__()
+        self.node = node
+        self.graph = graph
+
+    def compose(self) -> ComposeResult:
+        is_root = len(self.graph.get_parent_ids(self.node.node_id)) == 0
+        is_leaf = len(self.graph.get_children_ids(self.node.node_id)) == 0
+        bullet = ("@" if is_root else ("○" if is_leaf else "<"))
+        with Vertical(id="dialog"):
+            yield Label("Edit status", id="modal-title")
+            yield Label(f"{bullet}  {self.node.description or ''}", id="node-desc")
+            yield Input(value=self.node.status or "", placeholder="filter…", id="widget")
+            with Horizontal(id="columns"):
+                for i, (header, statuses) in enumerate(_COLUMNS):
+                    with Vertical(classes="col-body"):
+                        yield Label(header, classes="col-header")
+                        yield Static(id=f"col-{i}")
+            yield Static(
+                "[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]",
+                id="hint", markup=True,
+            )
+
+    def on_mount(self) -> None:
+        self._matches: list[str] = []
+        self._selected: Optional[str] = None
+        inp = self.query_one("#widget", Input)
+        inp.focus()
+        self._refresh_columns(inp.value)
+
+    def _refresh_columns(self, query: str) -> None:
+        q = query.lower().strip()
+        matches = {s for s in STATUS_STYLES if not q or q in s}
+        self._matches = [s for s in STATUS_STYLES if s in matches]
+        # auto-select first match only when filtering; clear when input is empty
+        if q and self._matches:
+            if self._selected not in self._matches:
+                self._selected = self._matches[0]
+        else:
+            self._selected = None
+        for i, (_, statuses) in enumerate(_COLUMNS):
+            col_text = Text()
+            for s in statuses:
+                color = STATUS_STYLES.get(s, "")
+                active = s in matches
+                if active:
+                    prefix = "→ " if s == self._selected else "  "
+                    col_text.append(prefix + s, style=color)
+                else:
+                    col_text.append("  " + s, style=f"{color} strike dim")
+                col_text.append("\n")
+            self.query_one(f"#col-{i}", Static).update(col_text)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._refresh_columns(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        value = self._selected or event.value.strip() or None
+        self.dismiss({"attr": "status", "value": value})
+
+    def action_pick_suggestion(self) -> None:
+        if not self._matches:
+            return
+        inp = self.query_one("#widget", Input)
+        inp.value = self._selected or self._matches[0]
+        inp.action_end()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Edit modal ─────────────────────────────────────────────────────────────────
 
 
@@ -387,20 +521,12 @@ class EditModal(ModalScreen):
         color: $text-muted;
         margin-bottom: 1;
     }
-    #suggestions {
-        height: 1;
-        margin-top: 1;
-        color: $text-muted;
-    }
     #hint {
         color: $text-muted;
         margin-top: 1;
     }
     """
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("tab", "pick_suggestion", "Pick", show=False),
-    ]
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node, col_key: str):
         super().__init__()
@@ -423,36 +549,13 @@ class EditModal(ModalScreen):
                 )
             else:
                 yield Input(value=current, id="widget")
-                if self.col_key == "status":
-                    yield Static("", id="suggestions")
-                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
-                else:
-                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
+                yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
-        self._matches: list[str] = []
         self.query_one("#widget").focus()
-        if self.col_key == "status":
-            self._refresh_suggestions(getattr(self.node, self.field["attr"]) or "")
-
-    def _refresh_suggestions(self, query: str) -> None:
-        q = query.lower()
-        self._matches = [s for s in STATUS_STYLES if q in s]
-        t = Text()
-        for i, status in enumerate(self._matches):
-            if i:
-                t.append("  ")
-            color = STATUS_STYLES[status]
-            style = f"{color} underline" if i == 0 else color
-            t.append(status, style=style)
-        self.query_one("#suggestions", Static).update(t)
 
     def _dismiss_with_value(self, value: Optional[str]) -> None:
         self.dismiss({"attr": self.field["attr"], "value": value or None})
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if self.col_key == "status":
-            self._refresh_suggestions(event.value)
 
     # text field: Enter submits
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -463,14 +566,6 @@ class EditModal(ModalScreen):
         options = self.field.get("options", [])
         value = event.value if event.value in options else None
         self._dismiss_with_value(value)
-
-    def action_pick_suggestion(self) -> None:
-        # Tab picks the first match, or the one that exactly matches current input
-        inp = self.query_one("#widget", Input).value.strip().lower()
-        if not hasattr(self, "_matches") or not self._matches:
-            return
-        exact = [s for s in self._matches if s == inp]
-        self._dismiss_with_value(exact[0] if exact else self._matches[0])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -653,7 +748,10 @@ class PfqApp(App):
             return
         node = self.graph.get_node(row_key)
         saved_row = t.cursor_coordinate.row
-        self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, saved_row))
+        if col_key == "status":
+            self.push_screen(StatusModal(node, self.graph), lambda r: self._on_edit_done(r, saved_row))
+        else:
+            self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, saved_row))
 
     def _on_edit_done(self, result: Optional[dict], cursor_row: int) -> None:
         t = self._table()
