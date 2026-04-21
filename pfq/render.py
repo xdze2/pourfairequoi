@@ -142,17 +142,20 @@ def render_to_text(rows: list[ViewRow]) -> str:
     for row in rows:
         if row.role == "sentinel":
             lines.append("─ root")
-        elif row.role == "home_root":
+            continue
+        node = row.node
+        status_suffix = ("  (" + node.status + ")") if node.status else ""
+        if row.role == "home_root":
             b = row.bullet
-            lines.append(b + (" " if b else "") + (row.node.description or ""))
+            lines.append(b + (" " if b else "") + (node.description or "") + status_suffix)
         elif row.role == "selected":
             b = row.bullet
-            lines.append("▶ " + (b + " " if b else "") + (row.node.description or ""))
+            lines.append("▶ " + (b + " " if b else "") + (node.description or "") + status_suffix)
         else:  # "parent" or "child"
             segs = _tree_prefix_segments(
                 row.depth, row.index, row.items,
                 reverse=(row.role == "parent"), bullet=row.bullet,
             )
             prefix = "".join(s for s, _ in segs)
-            lines.append(prefix + (" " if row.bullet else "") + (row.node.description or ""))
+            lines.append(prefix + (" " if row.bullet else "") + (node.description or "") + status_suffix)
     return "\n".join(lines)
