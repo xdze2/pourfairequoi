@@ -1,5 +1,6 @@
 data/
-
+*vault*
+!project_vault
 
 node_modules
 .DS_Store
