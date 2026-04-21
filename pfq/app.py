@@ -617,8 +617,8 @@ class PfqApp(App):
         )
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("", key="margin", width=1)
-        table.add_column("description", key="desc", width=44)
-        table.add_column("type", key="type", width=12)
+        table.add_column("description", key="desc", width=66)
+        table.add_column("type", key="type", width=0)
         table.add_column("status", key="status", width=10)
         yield table
         yield Footer()
