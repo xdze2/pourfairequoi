@@ -58,17 +58,15 @@ def _status_rich(status: str, depth: int, is_leaf: bool = False, is_root: bool =
     glyph = STATUS_GLYPHS.get(s, "·" if indent else "")
     glyph_str = (glyph + " ") if glyph else ""
     bg = f" on {STATUS_MISMATCH_BG}" if mismatch else ""
-    if color:
-        if depth == 0:
-            return Text.from_markup(f"[{color}]{glyph_str}[/][bold {color}{bg}]{status}[/]")
-        elif depth == 2:
-            return Text.from_markup(f"[dim {color}]{glyph_str}[/][dim {color}{bg}]{status}[/]")
-        else:
-            return Text.from_markup(f"[{color}]{glyph_str}[/][{color}{bg}]{status}[/]")
-    if mismatch:
-        return Text.from_markup(f"[dim]{glyph_str}[/][on {STATUS_MISMATCH_BG}]{status}[/]")
-    t = _rich(status, depth)
-    return Text.from_markup(f"[dim]{glyph_str}[/]") + t
+    if depth == 0:
+        style, glyph_style = f"bold {color}{bg}" if color else f"bold{bg}", f"bold {color}" if color else "bold"
+    elif depth == 2:
+        style, glyph_style = f"dim {color}{bg}" if color else f"dim{bg}", f"dim {color}" if color else "dim"
+    else:
+        style, glyph_style = f"{color}{bg}" if color else bg, color or ""
+    if mismatch and not color:
+        style = f"on {STATUS_MISMATCH_BG}"
+    return Text.from_markup(f"[{glyph_style}]{glyph_str}[/][{style}]{status}[/]")
 
 
 def _margin_cell(role: NodeRole, boundary: bool) -> str:
@@ -156,8 +154,8 @@ class CreateModal(ModalScreen):
         align: center middle;
     }
     #dialog {
-        background: $surface;
-        border: thick $primary;
+        background: #1e1a00;
+        border: round #7a6000;
         padding: 1 2;
         width: 52;
         height: auto;
@@ -165,6 +163,12 @@ class CreateModal(ModalScreen):
     #dialog Label {
         color: $text-muted;
         margin-bottom: 1;
+    }
+    #widget {
+        border: tall #7a6000;
+    }
+    #widget:focus {
+        border: tall #c8a000;
     }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -200,8 +204,8 @@ class DeleteModal(ModalScreen):
         align: center middle;
     }
     #dialog {
-        background: $surface;
-        border: thick $error;
+        background: $background;
+        border: round $error;
         padding: 1 2;
         width: 52;
         height: auto;
@@ -246,8 +250,8 @@ class LinkModal(ModalScreen):
         align: center middle;
     }
     #dialog {
-        background: $surface;
-        border: thick $primary;
+        background: #1e1a00;
+        border: round #7a6000;
         padding: 1 2;
         width: 60;
         height: auto;
@@ -265,6 +269,12 @@ class LinkModal(ModalScreen):
     #hint {
         color: $text-muted;
         margin-top: 1;
+    }
+    #widget {
+        border: tall #7a6000;
+    }
+    #widget:focus {
+        border: tall #c8a000;
     }
     """
     BINDINGS = [
@@ -392,8 +402,8 @@ class StatusModal(ModalScreen):
         align: center middle;
     }
     #dialog {
-        background: $surface;
-        border: thick $primary;
+        background: #1e1a00;
+        border: round #7a6000;
         padding: 1 2;
         width: 62;
         height: auto;
@@ -406,9 +416,12 @@ class StatusModal(ModalScreen):
         margin-bottom: 1;
     }
     #widget {
-        border: tall $primary;
+        border: tall #7a6000;
         background: $panel;
         margin-bottom: 1;
+    }
+    #widget:focus {
+        border: tall #c8a000;
     }
     #columns {
         height: auto;
@@ -515,8 +528,8 @@ class EditModal(ModalScreen):
         align: center middle;
     }
     #dialog {
-        background: $surface;
-        border: thick $primary;
+        background: #1e1a00;
+        border: round #7a6000;
         padding: 1 2;
         width: 52;
         height: auto;
@@ -528,6 +541,12 @@ class EditModal(ModalScreen):
     #hint {
         color: $text-muted;
         margin-top: 1;
+    }
+    #widget {
+        border: tall #7a6000;
+    }
+    #widget:focus {
+        border: tall #c8a000;
     }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -772,10 +791,10 @@ class PfqApp(App):
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
+        table.add_column("status", key="status", width=10)
         table.add_column("", key="margin", width=1)
         table.add_column("description", key="desc", width=66)
         table.add_column("type", key="type", width=0)
-        table.add_column("status", key="status", width=10)
         yield table
         yield CompanionPanel(id="companion")
         yield Footer()
@@ -801,10 +820,10 @@ class PfqApp(App):
         is_leaf = len(self.graph.get_children_ids(node.node_id)) == 0
         is_root = len(self.graph.get_parent_ids(node.node_id)) == 0
         self._table().add_row(
+            _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root, indent=depth),
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node, self.graph, index=index, items=items),
             _rich(node.type or "", depth),
-            _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root, indent=depth),
             key=node.node_id,
         )
 
@@ -820,10 +839,10 @@ class PfqApp(App):
             is_leaf = len(self.graph.get_children_ids(root_id)) == 0
             bullet = _node_bullet(root, self.graph, 0)
             t.add_row(
+                _status_rich(root.status or "", 0, is_leaf=is_leaf, is_root=True),
                 "",
                 _rich(bullet + (" " if bullet else "") + (root.description or ""), 0),
                 _rich(root.type or "", 0),
-                _status_rich(root.status or "", 0, is_leaf=is_leaf, is_root=True),
                 key=root_id,
             )
             seen.add(root_id)
@@ -850,7 +869,7 @@ class PfqApp(App):
         children = self.graph.get_childrens_tree(node_id)
 
         # Root line
-        t.add_row("─", Text("root", style="dim"), "", "", key="__home__")
+        t.add_row("", "─", Text("root", style="dim"), "", key="__home__")
 
         # Parents — farthest first; farthest gets "why" boundary label
         for i, (node, depth) in enumerate(parents):

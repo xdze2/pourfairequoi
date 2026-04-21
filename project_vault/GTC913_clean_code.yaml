@@ -5,4 +5,4 @@ how:
 - target_node: 02485O_full_tests_coverage
 - target_node: RHYDAP_fix_tests
 - target_node: XSDBJZ_screenshots
-status: todo
+status: someday
