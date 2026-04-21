@@ -506,6 +506,7 @@ class PfqApp(App):
         Binding("D", "delete_node", "Delete node"),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
+        Binding("y", "yank_view", "Copy view"),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -811,6 +812,62 @@ class PfqApp(App):
 
     def action_reorder_down(self) -> None:
         self._action_reorder(1)
+
+    # ── Yank (copy view) ───────────────────────────────────────────────────────
+
+    def _build_text_view(self) -> str:
+        """Reconstruct the visible node neighbourhood as plain text."""
+        if self.current_node_id is None:
+            # Home view: list roots
+            lines = ["root\n"]
+            for node_id in sorted(self.graph.get_roots()):
+                node = self.graph.get_node(node_id)
+                bullet = _node_bullet(node, self.graph, 0)
+                prefix = bullet + (" " if bullet else "")
+                lines.append(prefix + (node.description or ""))
+            return "\n".join(lines)
+
+        node_id = self.current_node_id
+        parents = list(reversed(self.graph.get_parents_tree(node_id)))
+        children = self.graph.get_childrens_tree(node_id)
+        seen = {node_id} | {n.node_id for n, _ in parents}
+        filtered_children = [(n, d) for n, d in children if n.node_id not in seen]
+
+        lines = ["─ root"]
+
+        for i, (node, depth) in enumerate(parents):
+            segs = _tree_prefix_segments(depth, i, list(parents), reverse=True, bullet=_node_bullet(node, self.graph, depth))
+            prefix = "".join(s for s, _ in segs)
+            bullet = _node_bullet(node, self.graph, depth)
+            lines.append(prefix + (" " if bullet else "") + (node.description or ""))
+
+        current = self.graph.get_node(node_id)
+        bullet = _node_bullet(current, self.graph, 0)
+        lines.append("▶ " + (bullet + " " if bullet else "") + (current.description or ""))
+
+        for i, (node, depth) in enumerate(filtered_children):
+            segs = _tree_prefix_segments(depth, i, list(filtered_children), reverse=False, bullet=_node_bullet(node, self.graph, depth))
+            prefix = "".join(s for s, _ in segs)
+            bullet = _node_bullet(node, self.graph, depth)
+            lines.append(prefix + (" " if bullet else "") + (node.description or ""))
+
+        return "\n".join(lines)
+
+    def action_yank_view(self) -> None:
+        try:
+            import pyperclip
+        except ImportError:
+            self.notify("pyperclip not installed — run: pip install pyperclip", severity="error")
+            return
+        text = self._build_text_view()
+        try:
+            pyperclip.copy(text)
+            self.notify("View copied to clipboard")
+        except pyperclip.PyperclipException:
+            self.notify(
+                "Clipboard not available — install xclip or xsel (Linux)",
+                severity="error",
+            )
 
     # ── Delete link / Delete node ───────────────────────────────────────────────
 
