@@ -16,12 +16,18 @@ venv/bin/pytest           # run tests
 Nodes form a DAG. `how:` links are stored in the parent; `why` is always derived by
 reversing `how` links at load time — never stored.
 
+Three-layer separation: **model → view → render**.
+
 | File | Role |
 |---|---|
-| `pfq/model.py` | `Node` dataclass + `NodeGraph` (load, traversal) |
+| `pfq/model.py` | `Node` dataclass + `NodeGraph` (graph traversal) |
 | `pfq/disk_io.py` | File I/O: `create_node`, `delete_node_file`, `save_node_fields`, `save_vault` |
-| `pfq/config.py` | `FIELDS` dict — editable column definitions (label, kind, attr, options) |
-| `pfq/app.py` | Textual TUI — navigation + field editing via `EditModal` |
+| `pfq/config.py` | `FIELDS`, `STATUS_STYLES`, `STATUS_GLYPHS`, status vocabularies |
+| `pfq/view.py` | `ViewRow` dataclass + `build_node_view()` + `build_home_view()` |
+| `pfq/render.py` | `render_to_table()`, `render_to_text()`, Rich text helpers |
+| `pfq/modals.py` | All modal screens: `CreateModal`, `DeleteModal`, `LinkModal`, `StatusModal`, `EditModal` |
+| `pfq/companion.py` | `CompanionPanel` — HAL-style inner voice widget |
+| `pfq/app.py` | `PfqApp` — navigation, actions, lifecycle only |
 | `pfq/__main__.py` | Click CLI entry point |
 
 ## Key API
@@ -42,47 +48,63 @@ Call `save_vault(graph)` from `disk_io` after any structural mutation (link/unli
 `node_id` is the 6-char prefix extracted from the filename stem (e.g. `AB0002` from `AB0002_practice_chords.yaml`).
 `target_node` in YAML always stores the full stem (`AB0002_practice_chords`) — the slug is cosmetic and may go stale on rename.
 
-Tree methods return `(node, depth)` pairs, DFS pre-order: each node appears immediately before its subtree (correct for tree views).
+Tree methods return `(node, depth)` pairs, DFS pre-order: each node appears immediately before its subtree.
 `get_parents_tree` result must be reversed before display (farthest ancestor on top).
 
-## Editing (`app.py` + `config.py`)
+## View model (`view.py`)
 
-`e` on a cell opens `EditModal(node, col_key)`. The modal looks up `FIELDS[col_key]` and renders one widget:
-- `kind: "text"` → `Input`, dismissed on `Enter` via `on_input_submitted`
-- `kind: "select"` → `Select`, auto-dismissed on `on_select_changed` (membership check, not `Select.BLANK`)
+`build_node_view(graph, node_id)` and `build_home_view(graph)` return `list[ViewRow]`.
+
+Each `ViewRow` carries everything the renderer needs — no graph access required in `render.py`:
+
+| Field | Content |
+|---|---|
+| `role` | `"sentinel"` / `"parent"` / `"selected"` / `"child"` / `"home_root"` |
+| `node` | `Node` object (None for sentinel) |
+| `depth` | tree depth |
+| `is_leaf`, `is_root` | precomputed from graph |
+| `bullet` | `"@"`, `"○"`, `"<"`, or `""` |
+| `index`, `items` | position + peer list for connector calculation |
+| `visible_parent_id` | graph parent shown in the current rendering |
+| `also_labels` | descriptions of other parents (for "also" column) |
+
+`PfqApp` stores `self._last_view: list[ViewRow]` — the rows currently on screen.
+Actions use it to look up visible parents without re-querying the graph:
+
+```python
+# find the visible parent of the focused child row
+parent_id = next(
+    (r.visible_parent_id for r in self._last_view
+     if r.node and r.node.node_id == row_key and r.role == "child"),
+    None,
+)
+```
+
+## Rendering (`render.py`)
+
+`render_to_table(rows, table)` — populates a `DataTable`, clears it first.
+`render_to_text(rows)` — returns the plain-text tree representation (used by yank).
+
+Neither function takes a `NodeGraph` argument — all graph-derived data is in `ViewRow`.
+
+`PALETTE` dict is defined in `render.py` and imported by `app.py` for the CSS f-string.
+
+## Editing (`modals.py` + `config.py`)
+
+`e` on a cell opens `StatusModal` (for the status column) or `EditModal(node, col_key)` (for others).
+
+`EditModal` looks up `FIELDS[col_key]` and renders one widget:
+- `kind: "text"` → `Input`, dismissed on `Enter`
+- `kind: "select"` → `Select`, auto-dismissed on change
 
 After dismiss, `_on_edit_done` calls `setattr(node, attr, value)` then `save_node_fields(node)`.
-
-`save_node_fields` in `disk_io.py` reads the raw YAML, patches only the three text fields, and writes back — `how` links are preserved untouched.
-`save_vault(graph)` rewrites the `how` list of every node file to match the in-memory `graph.links`. Call it after any structural mutation.
 
 To add a new editable field: add one entry to `FIELDS` in `config.py`. No changes needed elsewhere.
 
 ## Linking (`z` key — `LinkModal`)
 
-`z` on any node row opens `LinkModal(focused_node_id, graph)`. The modal lets the user:
-- **Search** existing nodes via `graph.search_nodes(query)` (fuzzy subsequence match, no external deps)
-- **Create** a new node on the fly (always shown as the last row when query is non-empty)
-
-On confirm, `_on_link_parent_done` calls `graph.link_child(parent_id, child_id, position)` then `save_vault(graph)`.
-
-The fuzzy scorer lives in `model.py` as `_fuzzy_score(query, target)` — pure-Python subsequence match with consecutive-run bonus. `NodeGraph.search_nodes(query)` uses it and returns nodes ranked by score, excluding those with no description.
-
-## TUI row notation (`app.py`)
-
-Tree rows use three semantic roles: `"parent"`, `"selected"`, `"child"`.
-Do **not** use `"why"` or `"how"` as role values — those are UX labels, not roles.
-The boundary label ("why" / "how") is controlled by the `boundary=True` kwarg on `_format_tree_row`.
-
-```python
-# correct
-_format_tree_row("parent", depth, node, boundary=True)   # shows "why" margin
-_format_tree_row("child",  depth, node, boundary=False)  # shows " │ " margin
-
-# wrong — "why" and "how" are not valid roles
-_format_tree_row("why",  depth, node)
-_format_tree_row("how",  depth, node)
-```
+`z` opens `LinkModal(focused_node_id, graph)`. Fuzzy search via `graph.search_nodes(query)`.
+On confirm, `_on_link_parent_done` calls `graph.link_child(parent_id, child_id, position)` + `save_vault(graph)`.
 
 ## Tests
 
@@ -92,9 +114,5 @@ tests/
 ├── test_model.py      # NodeGraph loading + traversal
 └── test_app.py        # TUI navigation (async, pytest-asyncio)
 ```
-
-`ListView.clear()` and `ListView.extend()` are async — always `await` them.
-
-
 
 **Important Textual gotcha:** `ListView.clear()` and `ListView.extend()` return awaitables — must be awaited or DOM updates are silently deferred (was the first UI bug).
