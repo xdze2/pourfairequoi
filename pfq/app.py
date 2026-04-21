@@ -43,28 +43,31 @@ def _rich(text: str, depth: int) -> Text:
     return t
 
 
-def _status_rich(status: str, depth: int, is_leaf: bool = False, is_root: bool = False) -> Text:
+def _status_rich(status: str, depth: int, is_leaf: bool = False, is_root: bool = False, indent: int = 0) -> Text:
     """Like _rich() but also applies STATUS_STYLES color when the status is known.
     Applies a subtle background when status doesn't match the node's structural role."""
+    prefix = "  " * indent
     if not status:
-        return _rich("", depth)
+        return Text(prefix)
     s = status.lower()
     color = STATUS_STYLES.get(s)
     mismatch = (
         (is_leaf and s in NODE_STATUSES) or
         ((is_root or not is_leaf) and s in LEAF_STATUSES)
     )
+    bullet = ("·" * indent + " ") if indent else ""
     bg = f" on {STATUS_MISMATCH_BG}" if mismatch else ""
     if color:
         if depth == 0:
-            return Text.from_markup(f"[bold {color}{bg}]{status}[/]")
+            return Text.from_markup(f"[dim]{bullet}[/][bold {color}{bg}]{status}[/]")
         elif depth == 2:
-            return Text.from_markup(f"[dim {color}{bg}]{status}[/]")
+            return Text.from_markup(f"[dim]{bullet}[/][dim {color}{bg}]{status}[/]")
         else:
-            return Text.from_markup(f"[{color}{bg}]{status}[/]")
+            return Text.from_markup(f"[dim]{bullet}[/][{color}{bg}]{status}[/]")
     if mismatch:
-        return Text.from_markup(f"[on {STATUS_MISMATCH_BG}]{status}[/]")
-    return _rich(status, depth)
+        return Text.from_markup(f"[dim]{bullet}[/][on {STATUS_MISMATCH_BG}]{status}[/]")
+    t = _rich(status, depth)
+    return Text.from_markup(f"[dim]{bullet}[/]") + t
 
 
 def _margin_cell(role: NodeRole, boundary: bool) -> str:
@@ -800,7 +803,7 @@ class PfqApp(App):
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node, self.graph, index=index, items=items),
             _rich(node.type or "", depth),
-            _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root),
+            _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root, indent=depth),
             key=node.node_id,
         )
 
