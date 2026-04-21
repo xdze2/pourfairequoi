@@ -15,6 +15,20 @@ STATUS_STYLES: dict[str, str] = {
     "someday":  "#a98fc4",  # soft purple
 }
 
+# Glyph shown in the status column before the status text, keyed by status.
+STATUS_GLYPHS: dict[str, str] = {
+    "todo":     "○",   # empty — waiting
+    "doable":   "›",   # possible, forward
+    "doing":    "▶",   # in motion
+    "done":     "✓",   # complete
+    "stuck":    "×",   # blocked
+    "waiting":  "…",   # suspended
+    "active":   "◉",   # alive
+    "on hold":  "⏸",   # paused
+    "archived": "∅",   # gone
+    "someday":  "◌",   # ghost
+}
+
 # Status values considered appropriate for each node role.
 LEAF_STATUSES   = {"todo", "doable", "doing", "done", "stuck", "waiting"}
 NODE_STATUSES   = {"active", "on hold", "archived", "someday"}

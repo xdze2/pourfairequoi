@@ -10,7 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, Label, Select, Static
 from textual.containers import Horizontal
 
-from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_MISMATCH_BG, STATUS_STYLES
+from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_MISMATCH_BG, STATUS_STYLES
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
     create_node,
@@ -55,19 +55,20 @@ def _status_rich(status: str, depth: int, is_leaf: bool = False, is_root: bool =
         (is_leaf and s in NODE_STATUSES) or
         ((is_root or not is_leaf) and s in LEAF_STATUSES)
     )
-    bullet = ("·" * indent + " ") if indent else ""
+    glyph = STATUS_GLYPHS.get(s, "·" if indent else "")
+    glyph_str = (glyph + " ") if glyph else ""
     bg = f" on {STATUS_MISMATCH_BG}" if mismatch else ""
     if color:
         if depth == 0:
-            return Text.from_markup(f"[dim]{bullet}[/][bold {color}{bg}]{status}[/]")
+            return Text.from_markup(f"[{color}]{glyph_str}[/][bold {color}{bg}]{status}[/]")
         elif depth == 2:
-            return Text.from_markup(f"[dim]{bullet}[/][dim {color}{bg}]{status}[/]")
+            return Text.from_markup(f"[dim {color}]{glyph_str}[/][dim {color}{bg}]{status}[/]")
         else:
-            return Text.from_markup(f"[dim]{bullet}[/][{color}{bg}]{status}[/]")
+            return Text.from_markup(f"[{color}]{glyph_str}[/][{color}{bg}]{status}[/]")
     if mismatch:
-        return Text.from_markup(f"[dim]{bullet}[/][on {STATUS_MISMATCH_BG}]{status}[/]")
+        return Text.from_markup(f"[dim]{glyph_str}[/][on {STATUS_MISMATCH_BG}]{status}[/]")
     t = _rich(status, depth)
-    return Text.from_markup(f"[dim]{bullet}[/]") + t
+    return Text.from_markup(f"[dim]{glyph_str}[/]") + t
 
 
 def _margin_cell(role: NodeRole, boundary: bool) -> str:
