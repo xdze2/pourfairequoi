@@ -785,6 +785,7 @@ class PfqApp(App):
         self.graph = load_vault(vault_path)
         self.current_node_id: Optional[str] = None
         self.history: List[Optional[str]] = []
+        self._visible_children: List[tuple] = []  # [(node, depth)] as rendered
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -793,7 +794,8 @@ class PfqApp(App):
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("status", key="status", width=10)
         table.add_column("", key="margin", width=1)
-        table.add_column("description", key="desc", width=66)
+        table.add_column("description", key="desc", width=50)
+        table.add_column("also", key="also", width=24)
         table.add_column("type", key="type", width=0)
         yield table
         yield CompanionPanel(id="companion")
@@ -816,13 +818,28 @@ class PfqApp(App):
         boundary: bool = False,
         index: int = 0,
         items: list = (),
+        visible_parent_id: Optional[str] = None,
     ) -> None:
         is_leaf = len(self.graph.get_children_ids(node.node_id)) == 0
         is_root = len(self.graph.get_parent_ids(node.node_id)) == 0
+        # "also" column: other parents not currently rendering this node
+        also_text = Text()
+        if visible_parent_id is not None:
+            other_parents = [
+                pid for pid in self.graph.get_parent_ids(node.node_id)
+                if pid != visible_parent_id
+            ]
+            if other_parents:
+                labels = ", ".join(
+                    self.graph.get_node(pid).description or pid
+                    for pid in other_parents
+                )
+                also_text = Text("← " + labels, style="dim cyan")
         self._table().add_row(
             _status_rich(node.status or "", depth, is_leaf=is_leaf, is_root=is_root, indent=depth),
             _margin_cell(role, boundary),
             _desc_cell(role, depth, node, self.graph, index=index, items=items),
+            also_text,
             _rich(node.type or "", depth),
             key=node.node_id,
         )
@@ -842,6 +859,7 @@ class PfqApp(App):
                 _status_rich(root.status or "", 0, is_leaf=is_leaf, is_root=True),
                 "",
                 _rich(bullet + (" " if bullet else "") + (root.description or ""), 0),
+                Text(),
                 _rich(root.type or "", 0),
                 key=root_id,
             )
@@ -869,7 +887,7 @@ class PfqApp(App):
         children = self.graph.get_childrens_tree(node_id)
 
         # Root line
-        t.add_row("", "─", Text("root", style="dim"), "", key="__home__")
+        t.add_row("", "─", Text("root", style="dim"), Text(), "", key="__home__")
 
         # Parents — farthest first; farthest gets "why" boundary label
         for i, (node, depth) in enumerate(parents):
@@ -877,7 +895,7 @@ class PfqApp(App):
                 "parent", depth, node, boundary=(i == 0), index=i, items=parents
             )
 
-        # Current node
+        # Current node (no "also" — it's the anchor of the view)
         self._add_row("selected", 0, self.graph.get_node(node_id))
         selected_row = 1 + len(parents)
 
@@ -885,7 +903,11 @@ class PfqApp(App):
         # exclude nodes already shown as parents (cycle-like graphs)
         seen = {node_id} | {n.node_id for n, _ in parents}
         filtered_children = [(n, d) for n, d in children if n.node_id not in seen]
+        self._visible_children = filtered_children
+        prev_by_depth: dict[int, str] = {0: node_id}
         for i, (node, depth) in enumerate(filtered_children):
+            visible_parent_id = prev_by_depth.get(depth - 1)
+            prev_by_depth[depth] = node.node_id
             self._add_row(
                 "child",
                 depth,
@@ -893,6 +915,7 @@ class PfqApp(App):
                 boundary=(i == len(filtered_children) - 1),
                 index=i,
                 items=filtered_children,
+                visible_parent_id=visible_parent_id,
             )
 
         t.move_cursor(
@@ -964,6 +987,14 @@ class PfqApp(App):
     # ── Append ─────────────────────────────────────────────────────────────────
 
     def action_append_node(self) -> None:
+        """Append a new node relative to the cursor position.
+
+        - Home view: create a new root node.
+        - depth-0 (current node): append a child at the end.
+        - depth-1 or depth-2: append a sibling after the focused node,
+          using the *visible* parent (from the rendered tree), not the graph
+          parent — important for nodes with multiple parents in the DAG.
+        """
         t = self._table()
 
         if self.current_node_id is None:
@@ -983,28 +1014,26 @@ class PfqApp(App):
         if row_key in parents:
             return
 
-        # Determine actual parent and insertion position.
-        # If cursor is on a depth-1 child → parent is current_node_id, insert after it.
-        # If cursor is on a depth-2 child → parent is the depth-1 node above it.
-        # If cursor is on current node itself → parent is current_node_id, insert at 0.
+        # depth-0 (current node): append child at end
+        # depth-1 or depth-2: append sibling using visible parent from rendered tree
         if row_key == self.current_node_id:
             actual_parent_id = self.current_node_id
-            position = 0
-        elif row_key in self.graph.get_children_ids(self.current_node_id):
-            # depth-1: insert after this child
-            siblings = self.graph.get_children_ids(self.current_node_id)
-            position = siblings.index(row_key) + 1
-            actual_parent_id = self.current_node_id
-        else:
-            # depth-2: find which depth-1 child owns this node
-            actual_parent_id = self.current_node_id
             position = len(self.graph.get_children_ids(self.current_node_id))
-            for cid in self.graph.get_children_ids(self.current_node_id):
-                siblings = self.graph.get_children_ids(cid)
-                if row_key in siblings:
-                    actual_parent_id = cid
-                    position = siblings.index(row_key) + 1
+        else:
+            # Walk _visible_children to find the focused node and its visible parent.
+            # The visible parent of a depth-d node is the nearest preceding node at depth d-1.
+            visible_depth = 1
+            visible_parent_id = self.current_node_id
+            prev_by_depth: dict[int, str] = {0: self.current_node_id}
+            for node, depth in self._visible_children:
+                prev_by_depth[depth] = node.node_id
+                if node.node_id == row_key:
+                    visible_depth = depth
+                    visible_parent_id = prev_by_depth.get(depth - 1, self.current_node_id)
                     break
+            siblings = self.graph.get_children_ids(visible_parent_id)
+            position = siblings.index(row_key) + 1 if row_key in siblings else len(siblings)
+            actual_parent_id = visible_parent_id
 
         parent_node = self.graph.get_node(actual_parent_id)
         label = parent_node.description or actual_parent_id
