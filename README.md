@@ -64,7 +64,7 @@ Using a leaf status on a root/middle node (or vice versa) is highlighted with a 
 
 ```yaml
 description: Build a vintage radio
-type: project                        # optional, legacy field
+type: project                        # optional
 status: active
 
 how:
@@ -123,6 +123,7 @@ The tree connectors are rounded (`╰`, `╭`). Node role symbols are embedded i
 | `d` | Unlink focused node from its visible parent |
 | `D` | Delete node |
 | `Shift+↑` / `Shift+↓` | Reorder children |
+| `y` | Copy current view to clipboard |
 
 ---
 
@@ -147,7 +148,7 @@ Key files:
 ```bash
 pip install -e .
 pfq                        # open default vault (data/)
-pfq --vault path/to/vault  # open a specific vault
+pfq /path/to/vault         # open a specific vault
 ```
 
 ---
@@ -161,8 +162,9 @@ pfq --vault path/to/vault  # open a specific vault
 - [x] Node editing (description, type, status)
 - [x] Create child node, link to parent, unlink, delete
 - [x] Reorder children
+- [x] Root node creation from home page
+- [x] Copy view to clipboard (`y`)
 - [ ] Search / filter on home page
-- [ ] Node creation from home page (root node)
 
 ---
 
