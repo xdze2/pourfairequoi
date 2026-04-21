@@ -25,9 +25,9 @@ INDENT = "   "  # per depth level
 
 # ── Color palette ──────────────────────────────────────────────────────────────
 PALETTE = {
-    "row_bg": "#1c2d40",  # selected row  — dark slate-blue (reserved, not yet applied)
-    "cell_bg": "#1a5276",  # cursor cell   — brighter blue
-    "cell_fg": "#eaf2ff",  # cursor cell text — near-white
+    "row_bg": "#1c2d40",  # selected row  — (reserved, not yet applied)
+    "cell_bg": "#2e2600",  # cursor cell   — dark yellow
+    "cell_fg": "#f0ead0",  # cursor cell text — warm white
 }
 
 NodeRole = Literal["parent", "selected", "child"]
@@ -571,15 +571,166 @@ class EditModal(ModalScreen):
         self.dismiss(None)
 
 
+# ── HAL palette ───────────────────────────────────────────────────────────────
+HAL = {
+    "bg": "#1a1a1e",          # near-black, cool gray — calm, not threatening
+    "border": "#7a3030",      # muted dark red border
+    "dot": "#cc3322",         # HAL eye — the one red accent
+    "dot_dim": "#663322",     # HAL eye when thinking
+    "text": "#c05050",        # warm red text
+    "text_bright": "#e07060", # brighter red for main message
+}
+
+# ASCII art spinner — dot orbiting a 6×6 box perimeter (20 positions)
+# Grid is 6 cols wide × 6 rows tall; perimeter traversed clockwise from top-left.
+def _build_hal_frames() -> list[list[str]]:
+    W, H = 6, 6
+    # Perimeter positions clockwise: top, right, bottom (reversed), left (reversed)
+    perimeter: list[tuple[int, int]] = []
+    for c in range(W):           perimeter.append((0, c))        # top L→R
+    for r in range(1, H):        perimeter.append((r, W - 1))    # right T→B
+    for c in range(W - 2, -1, -1): perimeter.append((H - 1, c)) # bottom R→L
+    for r in range(H - 2, 0, -1): perimeter.append((r, 0))      # left B→T
+
+    # Base grid: corners + edges as box-drawing chars
+    def base_grid() -> list[list[str]]:
+        g = [["·"] * W for _ in range(H)]
+        # corners
+        g[0][0] = "╭"; g[0][W-1] = "╮"
+        g[H-1][0] = "╰"; g[H-1][W-1] = "╯"
+        # edges
+        for c in range(1, W-1): g[0][c] = "─"; g[H-1][c] = "─"
+        for r in range(1, H-1): g[r][0] = "│"; g[r][W-1] = "│"
+        # interior empty
+        for r in range(1, H-1):
+            for c in range(1, W-1): g[r][c] = " "
+        return g
+
+    frames = []
+    for pos, (pr, pc) in enumerate(perimeter):
+        g = base_grid()
+        g[pr][pc] = "●"
+        frames.append(["".join(row) for row in g])
+    return frames
+
+_HAL_FRAMES = _build_hal_frames()
+
+PLACEHOLDER_MESSAGE = (
+    ">> I notice this node sits between two active threads with no clear connection.\n"
+    "   What holds them together for you?\n\n"
+    "  _A_ They share a constraint I haven't named yet\n"
+    "  _B_ One is a fallback for the other\n"
+    "  _C_ They don't — I should unlink one"
+)
+
+
+class CompanionPanel(Static):
+    """HAL-style inner voice panel, docked at the bottom."""
+
+    DEFAULT_CSS = f"""
+    CompanionPanel {{
+        layer: overlay;
+        dock: bottom;
+        margin: 1 4 2 4;
+        width: 75%;
+        height: auto;
+        max-height: 12;
+        background: {HAL['bg']};
+        border: round {HAL['border']};
+        padding: 1 2;
+        display: none;
+    }}
+    CompanionPanel.visible {{
+        display: block;
+    }}
+    """
+
+    _frame_index: int = 0
+    _timer = None
+    _thinking: bool = False
+
+    def render(self) -> Text:
+        spinner_color = HAL["dot"] if not self._thinking else HAL["dot_dim"]
+        dim_color = HAL["border"]
+        frame = _HAL_FRAMES[self._frame_index]  # list of 6 strings, each 6 chars wide
+        msg_lines = PLACEHOLDER_MESSAGE.split("\n")
+
+        result = Text()
+        for i, spin_line in enumerate(frame):
+            # Spinner column: dim the structure chars, highlight the dot
+            for ch in spin_line:
+                if ch == "●":
+                    result.append(ch, style=f"bold {spinner_color}")
+                else:
+                    result.append(ch, style=dim_color)
+            result.append("  ")  # gap between spinner and text
+            # Text column: align message lines to spinner rows
+            if i < len(msg_lines):
+                result.append(msg_lines[i], style=HAL["text_bright"])
+            result.append("\n")
+
+        # Status bar
+        result.append("\n")
+        result.append("  ✦ response cached", style=f"dim {HAL['text']}")
+        result.append("   ", style="")
+        result.append("F5", style=f"bold {HAL['text']}")
+        result.append(" recompute", style=f"dim {HAL['text']}")
+        result.append("   ", style="")
+        result.append("F2", style=f"bold {HAL['text']}")
+        result.append(" hide", style=f"dim {HAL['text']}")
+
+        return result
+
+    def start_thinking(self) -> None:
+        self._thinking = True
+        self._frame_index = 0
+        self._timer = self.set_interval(0.15, self._tick)
+        self.refresh()
+
+    def stop_thinking(self, message: str = PLACEHOLDER_MESSAGE) -> None:
+        self._thinking = False
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+        self.refresh()
+
+    def _tick(self) -> None:
+        self._frame_index = (self._frame_index + 1) % len(_HAL_FRAMES)
+        self.refresh()
+
+
 # ── Main app ───────────────────────────────────────────────────────────────────
 
 
 class PfqApp(App):
     TITLE = "pfq"
+    LAYERS = ["default", "overlay"]
     CSS = f"""
-    DataTable > .datatable--cursor {{
+    DataTable {{
+        background: $background;
+    }}
+    DataTable:focus {{
+        background-tint: transparent;
+    }}
+    DataTable > .datatable--header {{
+        background: transparent;
+        color: $foreground 30%;
+        text-style: none;
+    }}
+    DataTable > .datatable--even-row {{
+        background: $background;
+    }}
+    DataTable:focus > .datatable--cursor {{
         background: {PALETTE['cell_bg']};
         color: {PALETTE['cell_fg']};
+    }}
+    DataTable > .datatable--cursor {{
+        background: $background;
+        color: $foreground;
+        text-style: none;
+    }}
+    DataTable {{
+        margin: 1 1 1 3;
     }}
     #app-header {{
         dock: top;
@@ -602,6 +753,7 @@ class PfqApp(App):
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
         Binding("y", "yank_view", "Copy view"),
+        Binding("f2", "toggle_companion", "AI", show=True),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -613,7 +765,7 @@ class PfqApp(App):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"[bold reverse] p f q [/]  {self.vault_path.name}/", id="app-header"
+            f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("", key="margin", width=1)
@@ -621,6 +773,7 @@ class PfqApp(App):
         table.add_column("type", key="type", width=0)
         table.add_column("status", key="status", width=10)
         yield table
+        yield CompanionPanel(id="companion")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -988,6 +1141,16 @@ class PfqApp(App):
                 "Clipboard not available — install xclip or xsel (Linux)",
                 severity="error",
             )
+
+    # ── Companion panel ────────────────────────────────────────────────────────
+
+    def action_toggle_companion(self) -> None:
+        panel = self.query_one("#companion", CompanionPanel)
+        panel.toggle_class("visible")
+        if panel.has_class("visible"):
+            panel.start_thinking()
+        else:
+            panel.stop_thinking()
 
     # ── Delete link / Delete node ───────────────────────────────────────────────
 
