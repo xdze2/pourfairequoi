@@ -657,17 +657,31 @@ class PfqApp(App):
         self.current_node_id = None
         t = self._table()
         t.clear()
-        for node_id in sorted(self.graph.get_roots()):
-            node = self.graph.get_node(node_id)
-            bullet = _node_bullet(node, self.graph, 0)
-            is_leaf = len(self.graph.get_children_ids(node_id)) == 0
+        seen: set[str] = set()
+        for root_id in sorted(self.graph.get_roots()):
+            root = self.graph.get_node(root_id)
+            is_leaf = len(self.graph.get_children_ids(root_id)) == 0
+            bullet = _node_bullet(root, self.graph, 0)
             t.add_row(
                 "",
-                _rich(bullet + (" " if bullet else "") + (node.description or ""), 0),
-                _rich(node.type or "", 0),
-                _status_rich(node.status or "", 0, is_leaf=is_leaf, is_root=True),
-                key=node.node_id,
+                _rich(bullet + (" " if bullet else "") + (root.description or ""), 0),
+                _rich(root.type or "", 0),
+                _status_rich(root.status or "", 0, is_leaf=is_leaf, is_root=True),
+                key=root_id,
             )
+            seen.add(root_id)
+            children = self.graph.get_childrens_tree(root_id, max_depth=1)
+            children = [(n, d) for n, d in children if n.node_id not in seen]
+            for i, (node, depth) in enumerate(children):
+                self._add_row(
+                    "child",
+                    depth,
+                    node,
+                    boundary=(i == len(children) - 1),
+                    index=i,
+                    items=children,
+                )
+                seen.add(node.node_id)
 
     def _show_node(self, node_id: str, *, cursor_row: Optional[int] = None) -> None:
         self.current_node_id = node_id
@@ -916,13 +930,21 @@ class PfqApp(App):
     def _build_text_view(self) -> str:
         """Reconstruct the visible node neighbourhood as plain text."""
         if self.current_node_id is None:
-            # Home view: list roots
-            lines = ["root\n"]
-            for node_id in sorted(self.graph.get_roots()):
-                node = self.graph.get_node(node_id)
-                bullet = _node_bullet(node, self.graph, 0)
-                prefix = bullet + (" " if bullet else "")
-                lines.append(prefix + (node.description or ""))
+            lines = []
+            seen: set[str] = set()
+            for root_id in sorted(self.graph.get_roots()):
+                root = self.graph.get_node(root_id)
+                bullet = _node_bullet(root, self.graph, 0)
+                lines.append(bullet + (" " if bullet else "") + (root.description or ""))
+                seen.add(root_id)
+                children = self.graph.get_childrens_tree(root_id, max_depth=1)
+                children = [(n, d) for n, d in children if n.node_id not in seen]
+                for i, (node, depth) in enumerate(children):
+                    segs = _tree_prefix_segments(depth, i, list(children), reverse=False, bullet=_node_bullet(node, self.graph, depth))
+                    prefix = "".join(s for s, _ in segs)
+                    b = _node_bullet(node, self.graph, depth)
+                    lines.append(prefix + (" " if b else "") + (node.description or ""))
+                    seen.add(node.node_id)
             return "\n".join(lines)
 
         node_id = self.current_node_id
