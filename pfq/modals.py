@@ -13,32 +13,53 @@ from textual.widgets import DataTable, Input, Label, Select, Static
 from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_STYLES
 from pfq.model import Node, NodeGraph
 
+# Shared CSS for the title-bar modal pattern
+_MODAL_BASE_CSS = """
+    {cls} {{
+        align: center middle;
+    }}
+    {cls} #dialog {{
+        background: $background;
+        border-left: tall $primary;
+        border-right: tall $primary;
+        border-bottom: tall $primary;
+        padding: 0 0 1 0;
+        height: auto;
+    }}
+    {cls} #modal-title {{
+        background: $primary;
+        color: $background;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
+        margin-bottom: 1;
+    }}
+    {cls} #dialog-body {{
+        padding: 0 2;
+        height: auto;
+    }}
+    {cls} #widget {{
+        border: tall $primary-darken-2;
+        background: $panel;
+    }}
+    {cls} #widget:focus {{
+        border: tall $primary;
+    }}
+    {cls} #hint {{
+        color: $text-muted;
+        margin-top: 1;
+    }}
+"""
+
 # ── Create ─────────────────────────────────────────────────────────────────────
 
 
 class CreateModal(ModalScreen):
     """Prompt for a description, then dismiss with the string (or None on cancel)."""
 
-    CSS = """
-    CreateModal {
-        align: center middle;
-    }
-    #dialog {
-        background: #1e1a00;
-        border: round #7a6000;
-        padding: 1 2;
+    CSS = _MODAL_BASE_CSS.format(cls="CreateModal") + """
+    CreateModal #dialog {
         width: 52;
-        height: auto;
-    }
-    #dialog Label {
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    #widget {
-        border: tall #7a6000;
-    }
-    #widget:focus {
-        border: tall #c8a000;
     }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -49,8 +70,13 @@ class CreateModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"New child of: {self.parent_label}")
-            yield Input(placeholder="Description…", id="widget")
+            yield Label(f"Create  {self._short_label()}", id="modal-title")
+            with Vertical(id="dialog-body"):
+                yield Input(placeholder="Description…", id="widget")
+
+    def _short_label(self) -> str:
+        label = self.parent_label or ""
+        return ("under " + (label[:28] + "…" if len(label) > 28 else label)) if label else ""
 
     def on_mount(self) -> None:
         self.query_one("#widget").focus()
@@ -83,17 +109,27 @@ class DeleteModal(ModalScreen):
     DeleteModal {
         align: center middle;
     }
-    #dialog {
+    DeleteModal #dialog {
         background: $background;
-        border: round $error;
-        padding: 1 2;
+        border-left: tall $error;
+        border-right: tall $error;
+        border-bottom: tall $error;
+        padding: 0 0 1 0;
         width: 62;
         height: auto;
     }
-    #title {
-        color: $error;
-        text-style: bold;
+
+    DeleteModal #modal-title {
+        background: $error;
+        color: $background;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
         margin-bottom: 1;
+    }
+    DeleteModal #dialog-body {
+        padding: 0 2;
+        height: auto;
     }
     .option {
         border: round $surface-lighten-2;
@@ -118,19 +154,30 @@ class DeleteModal(ModalScreen):
         color: $text-disabled;
         padding-left: 1;
     }
-    #hint {
+    DeleteModal #hint {
         color: $text-muted;
         margin-top: 1;
     }
     #confirm-dialog {
         background: $background;
-        border: round $error;
-        padding: 1 2;
+        border-left: tall $error;
+        border-right: tall $error;
+        border-bottom: tall $error;
+        padding: 0 0 1 0;
         width: 60;
         height: auto;
     }
-    #confirm-title {
+    #confirm-modal-title {
+        background: $error;
+        color: $background;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
         margin-bottom: 1;
+    }
+    #confirm-body {
+        padding: 0 2;
+        height: auto;
     }
     #confirm-hint {
         color: $text-muted;
@@ -153,19 +200,20 @@ class DeleteModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"Delete  {self.node_label}", id="title")
-            for i, opt in enumerate(self.options):
-                with Vertical(classes="option", id=f"opt-{i}"):
-                    yield Static(opt["label"], id=f"opt-label-{i}", classes="option-label")
-                    yield Static(opt["detail"], classes="option-detail")
-                    if opt.get("nodes"):
-                        preview = opt["nodes"][:5]
-                        extra = len(opt["nodes"]) - len(preview)
-                        lines = "\n".join(f"  ○ {n}" for n in preview)
-                        if extra:
-                            lines += f"\n  … and {extra} more"
-                        yield Static(lines, classes="option-nodes")
-            yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
+            yield Label(f"Delete  {self.node_label}", id="modal-title")
+            with Vertical(id="dialog-body"):
+                for i, opt in enumerate(self.options):
+                    with Vertical(classes="option", id=f"opt-{i}"):
+                        yield Static(opt["label"], id=f"opt-label-{i}", classes="option-label")
+                        yield Static(opt["detail"], classes="option-detail")
+                        if opt.get("nodes"):
+                            preview = opt["nodes"][:5]
+                            extra = len(opt["nodes"]) - len(preview)
+                            lines = "\n".join(f"  ○ {n}" for n in preview)
+                            if extra:
+                                lines += f"\n  … and {extra} more"
+                            yield Static(lines, classes="option-nodes")
+                yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
         self._refresh()
@@ -206,8 +254,10 @@ class DeleteModal(ModalScreen):
 
             def compose(self_inner) -> ComposeResult:
                 with Vertical(id="confirm-dialog"):
-                    yield Label(f"[bold red]{opt['label']}[/]  —  {msg}", id="confirm-title", markup=True)
-                    yield Static("[dim]Enter confirm   Esc cancel[/]", id="confirm-hint", markup=True)
+                    yield Label(f"Confirm  {opt['label']}", id="confirm-modal-title")
+                    with Vertical(id="confirm-body"):
+                        yield Label(msg, id="confirm-title")
+                        yield Static("[dim]Enter confirm   Esc cancel[/]", id="confirm-hint", markup=True)
 
             def action_yes(self_inner) -> None:
                 self_inner.dismiss(True)
@@ -239,71 +289,48 @@ class NodePickerModal(ModalScreen):
       None — cancelled
     """
 
-    CSS = """
-    NodePickerModal {
-        align: center middle;
-    }
-    #dialog {
-        background: $background;
-        border: round $primary;
-        padding: 0 0 1 0;
+    CSS = _MODAL_BASE_CSS.format(cls="NodePickerModal") + """
+    NodePickerModal #dialog {
         width: 68;
         height: 24;
     }
-    #modal-title {
-        background: $primary-darken-2;
-        color: $text;
-        padding: 0 2;
-        width: 1fr;
-        height: 1;
+    NodePickerModal #dialog-body {
+        height: 1fr !important;
     }
-    #dialog-body {
-        padding: 0 2;
-        height: 1fr;
-    }
-    #dir-label {
+    NodePickerModal #dir-label {
         color: $text-disabled;
         margin-top: 1;
     }
-    #direction {
+    NodePickerModal #direction {
         height: 1;
         margin-top: 0;
         margin-bottom: 1;
     }
-    #dir-parent, #dir-child {
+    NodePickerModal #dir-parent, NodePickerModal #dir-child {
         width: 1fr;
         padding: 0 1;
         background: $surface;
         color: $text-disabled;
         border: none;
     }
-    #dir-parent.--active, #dir-child.--active {
+    NodePickerModal #dir-parent.--active, NodePickerModal #dir-child.--active {
         background: $surface-lighten-1;
         color: $text;
         text-style: bold;
     }
-    #results {
+    NodePickerModal #results {
         height: 1fr;
         overflow-y: auto;
         overflow-x: hidden;
         margin-top: 1;
         background: $background;
     }
-    #results > .datatable--cursor {
+    NodePickerModal #results > .datatable--cursor {
         background: #2e2600;
         color: #f0ead0;
     }
-    #hint {
-        color: $text-muted;
+    NodePickerModal #hint {
         height: 1;
-        margin-top: 1;
-    }
-    #widget {
-        border: tall $primary-darken-2;
-        background: $panel;
-    }
-    #widget:focus {
-        border: tall $primary;
     }
     """
     BINDINGS = [
@@ -512,48 +539,28 @@ _COLUMNS = [
 class StatusModal(ModalScreen):
     """Status editor: three role columns with filter input and free-text entry."""
 
-    CSS = """
-    StatusModal {
-        align: center middle;
-    }
-    #dialog {
-        background: #1e1a00;
-        border: round #7a6000;
-        padding: 1 2;
+    CSS = _MODAL_BASE_CSS.format(cls="StatusModal") + """
+    StatusModal #dialog {
         width: 62;
-        height: auto;
     }
-    #modal-title {
-        color: $text-muted;
+    StatusModal #node-desc {
         margin-bottom: 1;
     }
-    #node-desc {
+    StatusModal #widget {
         margin-bottom: 1;
     }
-    #widget {
-        border: tall #7a6000;
-        background: $panel;
-        margin-bottom: 1;
-    }
-    #widget:focus {
-        border: tall #c8a000;
-    }
-    #columns {
+    StatusModal #columns {
         height: auto;
         margin-bottom: 1;
     }
-    .col-header {
+    StatusModal .col-header {
         color: $text-disabled;
         text-style: dim;
         width: 1fr;
     }
-    .col-body {
+    StatusModal .col-body {
         width: 1fr;
         height: auto;
-    }
-    #hint {
-        color: $text-muted;
-        margin-top: 1;
     }
     """
     BINDINGS = [
@@ -571,18 +578,19 @@ class StatusModal(ModalScreen):
         is_leaf = len(self.graph.get_children_ids(self.node.node_id)) == 0
         bullet = "@" if is_root else ("○" if is_leaf else "<")
         with Vertical(id="dialog"):
-            yield Label("Edit status", id="modal-title")
-            yield Label(f"{bullet}  {self.node.description or ''}", id="node-desc")
-            yield Input(value=self.node.status or "", placeholder="filter…", id="widget")
-            with Horizontal(id="columns"):
-                for i, (header, statuses) in enumerate(_COLUMNS):
-                    with Vertical(classes="col-body"):
-                        yield Label(header, classes="col-header")
-                        yield Static(id=f"col-{i}")
-            yield Static(
-                "[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]",
-                id="hint", markup=True,
-            )
+            yield Label("Set status", id="modal-title")
+            with Vertical(id="dialog-body"):
+                yield Label(f"{bullet}  {self.node.description or ''}", id="node-desc")
+                yield Input(value=self.node.status or "", placeholder="filter…", id="widget")
+                with Horizontal(id="columns"):
+                    for i, (header, _) in enumerate(_COLUMNS):
+                        with Vertical(classes="col-body"):
+                            yield Label(header, classes="col-header")
+                            yield Static(id=f"col-{i}")
+                yield Static(
+                    "[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]",
+                    id="hint", markup=True,
+                )
 
     def on_mount(self) -> None:
         self._matches: list[str] = []
@@ -637,30 +645,9 @@ class StatusModal(ModalScreen):
 class EditModal(ModalScreen):
     """Single-field editor. Driven by FIELDS config — no hardcoded field logic."""
 
-    CSS = """
-    EditModal {
-        align: center middle;
-    }
-    #dialog {
-        background: #1e1a00;
-        border: round #7a6000;
-        padding: 1 2;
+    CSS = _MODAL_BASE_CSS.format(cls="EditModal") + """
+    EditModal #dialog {
         width: 52;
-        height: auto;
-    }
-    #dialog Label {
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    #hint {
-        color: $text-muted;
-        margin-top: 1;
-    }
-    #widget {
-        border: tall #7a6000;
-    }
-    #widget:focus {
-        border: tall #c8a000;
     }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -674,14 +661,15 @@ class EditModal(ModalScreen):
     def compose(self) -> ComposeResult:
         current = getattr(self.node, self.field["attr"]) or ""
         with Vertical(id="dialog"):
-            yield Label(self.field["label"])
-            if self.field["kind"] == "select":
-                options = self.field["options"]
-                extra = {"value": current} if current in options else {}
-                yield Select([(o, o) for o in options], allow_blank=True, id="widget", **extra)
-            else:
-                yield Input(value=current, id="widget")
-                yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
+            yield Label(f"Edit  {self.field['label']}", id="modal-title")
+            with Vertical(id="dialog-body"):
+                if self.field["kind"] == "select":
+                    options = self.field["options"]
+                    extra = {"value": current} if current in options else {}
+                    yield Select([(o, o) for o in options], allow_blank=True, id="widget", **extra)
+                else:
+                    yield Input(value=current, id="widget")
+                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
         self.query_one("#widget").focus()
