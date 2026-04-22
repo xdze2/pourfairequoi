@@ -9,3 +9,5 @@ how:
 - target_node: U3XDUD_delete_node
 - target_node: TB5TUH_re_order_child_node
 - target_node: 0NOK59_home_page_clean_roots_view
+- target_node: S9ZE67_add_link_as_children
+- target_node: IC0MLT_filter_view_on_status

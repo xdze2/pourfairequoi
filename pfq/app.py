@@ -23,7 +23,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, JumpModal, LinkModal, StatusModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StatusModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -264,7 +264,7 @@ class PfqApp(App):
         if row_key not in self.graph.nodes:
             return
         self.push_screen(
-            LinkModal(row_key, self.graph),
+            NodePickerModal(self.graph, placeholder="› link to parent…", allow_create=True, exclude_id=row_key),
             lambda result: self._on_link_parent_done(result, row_key),
         )
 
@@ -275,7 +275,7 @@ class PfqApp(App):
             parent = create_node(result["description"], self.vault_path)
             self.graph.add_node(parent)
             parent_id = parent.node_id
-        else:
+        else:  # "pick"
             parent_id = result["node_id"]
         self.graph.link_child(parent_id, child_id, len(self.graph.get_children_ids(parent_id)))
         save_vault(self.graph)
@@ -314,11 +314,11 @@ class PfqApp(App):
     # ── Jump ───────────────────────────────────────────────────────────────────
 
     def action_jump(self) -> None:
-        def _on_jump(node_id: Optional[str]) -> None:
-            if node_id:
-                self._navigate_to(node_id)
+        def _on_jump(result: Optional[dict]) -> None:
+            if result:
+                self._navigate_to(result["node_id"])
 
-        self.push_screen(JumpModal(self.graph), _on_jump)
+        self.push_screen(NodePickerModal(self.graph), _on_jump)
 
     # ── Yank ───────────────────────────────────────────────────────────────────
 

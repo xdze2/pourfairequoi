@@ -226,153 +226,20 @@ class DeleteModal(ModalScreen):
         self.dismiss(None)
 
 
-# ── Link ───────────────────────────────────────────────────────────────────────
+# ── NodePickerModal ─────────────────────────────────────────────────────────────
 
 
-class LinkModal(ModalScreen):
-    """Search existing nodes or create a new one, then link it as a parent."""
+class NodePickerModal(ModalScreen):
+    """Fuzzy node search with grouped results.
 
-    CSS = """
-    LinkModal {
-        align: center middle;
-    }
-    #dialog {
-        background: #1e1a00;
-        border: round #7a6000;
-        padding: 1 2;
-        width: 60;
-        height: auto;
-    }
-    #dialog Label {
-        color: $text-muted;
-        margin-bottom: 1;
-    }
-    #results {
-        height: auto;
-        max-height: 12;
-        overflow-y: auto;
-        margin-top: 1;
-    }
-    #hint {
-        color: $text-muted;
-        margin-top: 1;
-    }
-    #widget {
-        border: tall #7a6000;
-    }
-    #widget:focus {
-        border: tall #c8a000;
-    }
+    Dismisses with:
+      {"action": "pick",   "node_id": str}   — a node was selected
+      {"action": "create", "description": str} — only when allow_create=True
+      None                                    — cancelled
     """
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("up", "move_up", "Up"),
-        Binding("down", "move_down", "Down"),
-        Binding("enter", "confirm", "Confirm"),
-    ]
-
-    def __init__(self, current_node_id: str, graph: NodeGraph):
-        super().__init__()
-        self.current_node_id = current_node_id
-        self.graph = graph
-        self._matches: list[tuple[str, str]] = []  # [(node_id, description)]
-        self._selected: int = 0                    # index into _matches, or -1 = "create new"
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label("Link to parent — search or create")
-            yield Input(placeholder="Type to search…", id="widget")
-            yield DataTable(cursor_type="row", show_header=False, id="results")
-            yield Label("↑↓ select  Enter confirm  Esc cancel", id="hint")
-
-    def on_mount(self) -> None:
-        t = self.query_one("#results", DataTable)
-        t.add_column("desc", width=54)
-        self.query_one("#widget", Input).focus()
-
-    def _update_results(self, query: str) -> None:
-        t = self.query_one("#results", DataTable)
-        t.clear()
-        self._matches = []
-        self._selected = 0
-
-        if query:
-            results = self.graph.search_nodes(query)
-            self._matches = [
-                (n.node_id, n.description or "")
-                for n in results
-                if n.node_id != self.current_node_id
-            ][:10]
-
-        for node_id, desc in self._matches:
-            t.add_row(Text(desc), key=node_id)
-
-        if query.strip():
-            t.add_row(
-                Text(f'+ Create new: "{query.strip()}"', style="italic green"),
-                key="__create__",
-            )
-            if not self._matches:
-                self._selected = -1
-        self._highlight()
-
-    def _highlight(self) -> None:
-        t = self.query_one("#results", DataTable)
-        if t.row_count == 0:
-            return
-        row = len(self._matches) if self._selected == -1 else self._selected
-        row = max(0, min(row, t.row_count - 1))
-        t.move_cursor(row=row)
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        self._update_results(event.value)
-
-    def action_move_up(self) -> None:
-        total = len(self._matches) + (1 if self._create_row_shown() else 0)
-        if total == 0:
-            return
-        idx = len(self._matches) if self._selected == -1 else self._selected
-        idx = (idx - 1) % total
-        self._selected = -1 if idx == len(self._matches) else idx
-        self._highlight()
-
-    def action_move_down(self) -> None:
-        total = len(self._matches) + (1 if self._create_row_shown() else 0)
-        if total == 0:
-            return
-        idx = len(self._matches) if self._selected == -1 else self._selected
-        idx = (idx + 1) % total
-        self._selected = -1 if idx == len(self._matches) else idx
-        self._highlight()
-
-    def _create_row_shown(self) -> bool:
-        return bool(self.query_one("#widget", Input).value.strip())
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.action_confirm()
-
-    def action_confirm(self) -> None:
-        query = self.query_one("#widget", Input).value.strip()
-        if self._selected == -1 and query:
-            self.dismiss({"action": "create", "description": query})
-        elif self._matches and 0 <= self._selected < len(self._matches):
-            node_id, _ = self._matches[self._selected]
-            self.dismiss({"action": "link", "node_id": node_id})
-        elif not self._matches and not query:
-            self.dismiss(None)
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-# ── Jump ───────────────────────────────────────────────────────────────────────
-
-
-class JumpModal(ModalScreen):
-    """Global node search — type to fuzzy-search, Enter to navigate."""
 
     CSS = """
-    JumpModal {
+    NodePickerModal {
         align: center middle;
     }
     #dialog {
@@ -412,35 +279,34 @@ class JumpModal(ModalScreen):
         Binding("down", "move_down", "Down", show=False),
     ]
 
-    def __init__(self, graph: NodeGraph):
+    def __init__(
+        self,
+        graph: NodeGraph,
+        *,
+        placeholder: str = "› search nodes…",
+        allow_create: bool = False,
+        exclude_id: Optional[str] = None,
+    ):
         super().__init__()
         self.graph = graph
-        self._matches: list[str] = []  # node_ids in display order
-        self._selected: int = 0
+        self.placeholder = placeholder
+        self.allow_create = allow_create
+        self.exclude_id = exclude_id
+        self._matches: list[str] = []   # selectable node_ids in order
+        self._create_shown: bool = False
+        self._selected: int = 0         # index into _matches, or len(_matches) = "create"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Input(placeholder="› search nodes…", id="widget")
+            yield Input(placeholder=self.placeholder, id="widget")
             yield DataTable(cursor_type="row", show_header=False, id="results")
-            yield Label("↑↓ select  Enter go  Esc cancel", id="hint")
+            yield Label("↑↓ select  Enter confirm  Esc cancel", id="hint")
 
     def on_mount(self) -> None:
         t = self.query_one("#results", DataTable)
         t.add_column("row", width=62)
         self.query_one("#widget", Input).focus()
         self._update_results("")
-
-    def _default_nodes(self) -> list[str]:
-        """Return root node ids, same order as home view."""
-        return self.graph.get_roots()
-
-    def _parent_label(self, node_id: str) -> str:
-        parent_ids = self.graph.get_parent_ids(node_id)
-        if not parent_ids:
-            return ""
-        parent = self.graph.get_node(parent_ids[0])
-        desc = parent.description or parent_ids[0]
-        return desc[:22] + "…" if len(desc) > 22 else desc
 
     def _build_row_text(self, node_id: str, *, is_last: bool) -> Text:
         node = self.graph.get_node(node_id)
@@ -453,7 +319,7 @@ class JumpModal(ModalScreen):
         row = Text(overflow="ellipsis", no_wrap=True)
         row.append(connector, style="dim")
         max_desc = 44
-        row.append(desc[:max_desc], style="")
+        row.append(desc[:max_desc])
         if glyph or status:
             pad = max(1, max_desc - len(desc[:max_desc]) + 2)
             row.append(" " * pad)
@@ -464,24 +330,38 @@ class JumpModal(ModalScreen):
         t = self.query_one("#results", DataTable)
         t.clear()
         self._matches = []
+        self._create_shown = False
         self._selected = 0
 
         if query.strip():
-            nodes = self.graph.search_nodes(query)[:16]
+            nodes = [
+                n for n in self.graph.search_nodes(query)
+                if n.node_id != self.exclude_id
+            ][:16]
         else:
-            root_ids = self._default_nodes()
-            nodes = [self.graph.get_node(nid) for nid in root_ids]
+            nodes = [
+                self.graph.get_node(nid)
+                for nid in self.graph.get_roots()
+                if nid != self.exclude_id
+            ]
 
-        # Group by first parent (None = root / no parent)
+        # Group by first parent (None = roots)
         groups: dict[Optional[str], list[str]] = {}
         for node in nodes:
             parent_ids = self.graph.get_parent_ids(node.node_id)
             key = parent_ids[0] if parent_ids else None
             groups.setdefault(key, []).append(node.node_id)
 
+        if self.allow_create and query.strip():
+            create_text = Text(overflow="ellipsis", no_wrap=True)
+            create_text.append(f'+ Create "{query.strip()}"', style="italic green")
+            t.add_row(create_text, key="__create__")
+            self._create_shown = True
+            if not self._matches:
+                self._selected = len(self._matches)  # point at create row
+
         sep_counter = 0
         for parent_id, node_ids in groups.items():
-            # Header row — styled like a parent in the tree view
             if parent_id is None:
                 header = Text("@ roots", style="dim")
             else:
@@ -493,26 +373,31 @@ class JumpModal(ModalScreen):
 
             for i, node_id in enumerate(node_ids):
                 self._matches.append(node_id)
-                is_last = (i == len(node_ids) - 1)
-                t.add_row(self._build_row_text(node_id, is_last=is_last), key=node_id)
+                t.add_row(self._build_row_text(node_id, is_last=(i == len(node_ids) - 1)), key=node_id)
 
         self._highlight()
 
-    def _selectable_row_index(self, match_index: int) -> int:
-        """Return the DataTable row index for a given _matches index, skipping sep rows."""
+    def _total(self) -> int:
+        return len(self._matches) + (1 if self._create_shown else 0)
+
+    def _row_key_for_selected(self) -> str:
+        if self._selected == len(self._matches) and self._create_shown:
+            return "__create__"
+        return self._matches[self._selected]
+
+    def _selectable_row_index(self, key: str) -> int:
         t = self.query_one("#results", DataTable)
-        target_id = self._matches[match_index]
         try:
-            return t.get_row_index(target_id)
+            return t.get_row_index(key)
         except Exception:
             return 0
 
     def _highlight(self) -> None:
         t = self.query_one("#results", DataTable)
-        if not self._matches or t.row_count == 0:
+        if self._total() == 0 or t.row_count == 0:
             return
-        row = self._selectable_row_index(max(0, min(self._selected, len(self._matches) - 1)))
-        t.move_cursor(row=row)
+        key = self._row_key_for_selected()
+        t.move_cursor(row=self._selectable_row_index(key))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self._update_results(event.value)
@@ -521,22 +406,26 @@ class JumpModal(ModalScreen):
         self.action_confirm()
 
     def action_move_up(self) -> None:
-        if not self._matches:
+        if self._total() == 0:
             return
-        self._selected = (self._selected - 1) % len(self._matches)
+        self._selected = (self._selected - 1) % self._total()
         self._highlight()
 
     def action_move_down(self) -> None:
-        if not self._matches:
+        if self._total() == 0:
             return
-        self._selected = (self._selected + 1) % len(self._matches)
+        self._selected = (self._selected + 1) % self._total()
         self._highlight()
 
     def action_confirm(self) -> None:
-        if self._matches and 0 <= self._selected < len(self._matches):
-            self.dismiss(self._matches[self._selected])
-        else:
+        if self._total() == 0:
             self.dismiss(None)
+            return
+        if self._selected == len(self._matches) and self._create_shown:
+            query = self.query_one("#widget", Input).value.strip()
+            self.dismiss({"action": "create", "description": query})
+        else:
+            self.dismiss({"action": "pick", "node_id": self._matches[self._selected]})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
