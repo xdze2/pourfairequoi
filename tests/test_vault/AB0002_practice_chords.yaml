@@ -1,5 +1,5 @@
 description: Practice chords
+opened_at: '2026-03-01'
+update_period: 14
 how:
 - target_node: AC0003_find_tutorials
-status: todo
-type: task

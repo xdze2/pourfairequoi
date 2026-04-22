@@ -1,14 +1,9 @@
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import List, NamedTuple, Optional
 
 
 def _fuzzy_score(query: str, target: str) -> Optional[int]:
-    """Return a match score (higher = better) or None if query doesn't match target.
-
-    Subsequence match: every character of query must appear in order in target.
-    Bonus for consecutive runs of matching characters.
-    Both query and target should be pre-lowercased by the caller.
-    """
     if not query:
         return 0
     qi = 0
@@ -32,30 +27,31 @@ class Link(NamedTuple):
 
 
 @dataclass
-class Event:
-    type: str
-    date: str = None   # ISO date string (machine-readable, resolved at save time)
-    when: str = None   # raw user input e.g. "tomorrow", "april 2027" (display only)
-    text: str = None
-    extra: dict = field(default_factory=dict)  # catches unknown keys (from, to, etc.)
-
-
-@dataclass
 class Node:
     node_id: str
     description: str = None
-    type: str = None
-    status: str = None
-    note: str = None
+    opened_at: str = None               # ISO date, user-set (can be past or future)
+    closed_at: str = None               # ISO date, set on closing
+    close_reason: str = None            # "done" | "discarded" | None
+    estimated_closing_date: str = None  # ISO date | None
+    update_period: int = None           # days | None (None = no tracking)
+    comment: str = None
     filepath: str = None
-    timeline: list = field(default_factory=list)  # list[Event]
+    # computed by compute_lifecycle — never stored
+    _last_active: date = field(default=None, repr=False)
+    _last_update: date = field(default=None, repr=False)
+    _is_active: bool = field(default=None, repr=False)
+    _is_overdue: bool = field(default=None, repr=False)
+
+    @property
+    def is_closed(self) -> bool:
+        return self.closed_at is not None
 
 
 class NodeGraph:
     def __init__(self):
         self.nodes: dict[str, Node] = {}
         self.links: set[Link] = set()
-        # Tracks child insertion order per parent: parent_id → [child_id, ...]
         self._child_order: dict[str, list[str]] = {}
 
     def get_node(self, node_id: str) -> Node:
@@ -79,7 +75,6 @@ class NodeGraph:
             order.insert(position, child_id)
 
     def reorder_child(self, parent_id: str, child_id: str, delta: int) -> None:
-        """Move child_id up (delta=-1) or down (delta=+1) among its siblings."""
         order = self._child_order.get(parent_id)
         if not order or child_id not in order:
             return
@@ -149,9 +144,7 @@ class NodeGraph:
         return self._dfs_tree(node_id, self.get_children_ids, max_depth)
 
     def nodes_unanchored_after_removal(self, node_ids: set) -> set:
-        """Return nodes that would lose all paths to any root if node_ids were removed."""
         remaining = set(self.nodes.keys()) - node_ids
-        # Seed BFS from nodes that are roots in the original graph and survive removal
         reachable: set[str] = set()
         queue = [nid for nid in remaining if not self.get_parent_ids(nid)]
         while queue:
@@ -175,9 +168,7 @@ class NodeGraph:
         if mode == "node":
             return {node_id}
         if mode == "soft":
-            initial = {node_id}
-            # iterate: newly unanchored nodes may themselves unanchor more
-            to_delete = initial
+            to_delete = {node_id}
             while True:
                 unanchored = self.nodes_unanchored_after_removal(to_delete)
                 new_set = to_delete | unanchored
@@ -196,3 +187,64 @@ class NodeGraph:
                 stack.extend(self.get_children_ids(nid))
             return result
         raise ValueError(f"Unknown mode: {mode}")
+
+
+def compute_lifecycle(graph: NodeGraph, today: date = None) -> None:
+    """Compute _last_active, _last_update, _is_active, _is_overdue for all nodes.
+
+    Processes leaves first (bottom-up topological order) so each node can
+    aggregate its children's already-computed values.
+    """
+    if today is None:
+        today = date.today()
+
+    # Kahn's algorithm starting from leaves (out_degree == 0)
+    pending = {nid: len(graph.get_children_ids(nid)) for nid in graph.nodes}
+    queue = [nid for nid, d in pending.items() if d == 0]
+    order = []
+    while queue:
+        nid = queue.pop(0)
+        order.append(nid)
+        for pid in graph.get_parent_ids(nid):
+            pending[pid] -= 1
+            if pending[pid] == 0:
+                queue.append(pid)
+
+    for nid in order:
+        node = graph.nodes[nid]
+
+        # _last_active: max close_timestamp of closed direct children
+        # + _last_active of all children (propagated from below)
+        candidates = []
+        for cid in graph.get_children_ids(nid):
+            child = graph.nodes[cid]
+            if child.closed_at:
+                candidates.append(date.fromisoformat(child.closed_at))
+            if child._last_active is not None:
+                candidates.append(child._last_active)
+        node._last_active = max(candidates) if candidates else None
+
+        # _is_overdue
+        if node.estimated_closing_date:
+            node._is_overdue = today > date.fromisoformat(node.estimated_closing_date)
+        else:
+            node._is_overdue = None
+
+        # _last_update and _is_active
+        if node.update_period is None or node.opened_at is None:
+            node._last_update = None
+            node._is_active = None
+        else:
+            opened = date.fromisoformat(node.opened_at)
+            if today < opened:
+                # future opened_at — dormant until that date
+                node._last_update = None
+                node._is_active = None
+            else:
+                elapsed = (today - opened).days
+                periods = elapsed // node.update_period
+                node._last_update = opened + timedelta(days=periods * node.update_period)
+                node._is_active = (
+                    node._last_active is not None
+                    and node._last_active > node._last_update
+                )

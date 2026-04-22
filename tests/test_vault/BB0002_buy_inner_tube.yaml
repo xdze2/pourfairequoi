@@ -1,5 +1,4 @@
 description: Buy inner tube
-type: task
-status: todo
+opened_at: '2026-01-15'
 how:
 - target_node: ZZ0001_go_to_shop

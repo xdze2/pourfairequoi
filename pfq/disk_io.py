@@ -10,6 +10,11 @@ import yaml
 
 DEFAULT_VAULT_PATH = Path("data")
 
+_STORED_FIELDS = (
+    "description", "opened_at", "closed_at", "close_reason",
+    "estimated_closing_date", "update_period", "comment",
+)
+
 
 # ── Low-level helpers ─────────────────────────────────────────────────────────
 
@@ -33,98 +38,48 @@ def _new_filepath(description: str, vault: Path) -> Path:
     return vault / f"{_generate_id()}_{_slugify(description)}.yaml"
 
 
-# ── Node file operations ──────────────────────────────────────────────────────
-
-
 def _today() -> str:
     return date.today().isoformat()
 
 
-def _events_from_raw(raw_timeline) -> list:
-    from pfq.model import Event
-    if not raw_timeline:
-        return []
-    events = []
-    for entry in raw_timeline:
-        if not isinstance(entry, dict):
-            continue
-        known = {"type", "date", "when", "text"}
-        extra = {k: v for k, v in entry.items() if k not in known}
-        events.append(Event(
-            type=entry.get("type", ""),
-            date=str(entry["date"]) if entry.get("date") is not None else None,
-            when=str(entry["when"]) if entry.get("when") is not None else None,
-            text=entry.get("text"),
-            extra=extra,
-        ))
-    return events
+def _iso(value) -> str | None:
+    """Coerce a YAML date value (may be datetime.date or str) to ISO string."""
+    if value is None:
+        return None
+    return str(value)
 
 
-def _events_to_raw(events: list) -> list:
-    raw = []
-    for e in events:
-        entry = {"type": e.type}
-        if e.date is not None:
-            entry["date"] = e.date
-        if e.when is not None:
-            entry["when"] = e.when
-        if e.text:
-            entry["text"] = e.text
-        entry.update(e.extra)
-        raw.append(entry)
-    return raw
+# ── Node file operations ──────────────────────────────────────────────────────
 
 
 def create_node(description: str, vault: Path) -> "Node":
     """Create a new YAML file and return the Node (not yet linked to anything)."""
-    from pfq.model import Event, Node
+    from pfq.model import Node
 
     path = _new_filepath(description, vault)
     node_id = filename_to_node_id(path.stem)
-    created_event = Event(type="created", date=_today())
-    raw = {
-        "description": description,
-        "timeline": _events_to_raw([created_event]),
-    }
+    today = _today()
+    raw = {"description": description, "opened_at": today}
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
-    return Node(node_id=node_id, description=description, filepath=str(path),
-                timeline=[created_event])
+    return Node(node_id=node_id, description=description, opened_at=today, filepath=str(path))
 
 
 def delete_node_file(node: "Node") -> None:
-    """Delete the node's YAML file from disk."""
     Path(node.filepath).unlink(missing_ok=True)
 
 
 def save_node_fields(node: "Node") -> None:
-    """Persist description, type, status, note, timeline back to the node's YAML file.
+    """Persist stored fields back to the node's YAML file.
     The 'how' links and any unknown fields are preserved as-is."""
-    from pfq.model import Event
-
     path = Path(node.filepath)
     raw = yaml.safe_load(path.read_text()) or {}
 
-    old_status = raw.get("status")
-    new_status = node.status
-
-    for f in ("description", "type", "status", "note"):
+    for f in _STORED_FIELDS:
         value = getattr(node, f)
-        if value:
+        if value is not None:
             raw[f] = value
         else:
             raw.pop(f, None)
-
-    if old_status != new_status:
-        node.timeline.append(Event(
-            type="status_change",
-            date=_today(),
-            extra={"from": old_status, "to": new_status},
-        ))
-
-    if node.timeline:
-        raw["timeline"] = _events_to_raw(node.timeline)
-    else:
-        raw.pop("timeline", None)
 
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
 
@@ -132,9 +87,10 @@ def save_node_fields(node: "Node") -> None:
 # ── Vault-level I/O ───────────────────────────────────────────────────────────
 
 
-def load_vault(vault_path: Path) -> "NodeGraph":
-    """Load all nodes and links from YAML files in vault_path. Returns a NodeGraph."""
-    from pfq.model import Link, Node, NodeGraph
+def load_vault(vault_path: Path, today=None) -> "NodeGraph":
+    """Load all nodes and links from YAML files in vault_path. Returns a NodeGraph
+    with computed lifecycle fields populated."""
+    from pfq.model import Link, Node, NodeGraph, compute_lifecycle
 
     graph = NodeGraph()
     for path in sorted(vault_path.glob("*.yaml")):
@@ -143,11 +99,13 @@ def load_vault(vault_path: Path) -> "NodeGraph":
         graph.nodes[node_id] = Node(
             node_id=node_id,
             description=raw.get("description"),
-            type=raw.get("type"),
-            status=raw.get("status"),
-            note=raw.get("note"),
+            opened_at=_iso(raw.get("opened_at")),
+            closed_at=_iso(raw.get("closed_at")),
+            close_reason=raw.get("close_reason"),
+            estimated_closing_date=_iso(raw.get("estimated_closing_date")),
+            update_period=raw.get("update_period"),
+            comment=raw.get("comment"),
             filepath=str(path),
-            timeline=_events_from_raw(raw.get("timeline")),
         )
 
     for path in sorted(vault_path.glob("*.yaml")):
@@ -160,28 +118,19 @@ def load_vault(vault_path: Path) -> "NodeGraph":
                     graph.links.add(Link(parent_id, child_id))
                     graph._child_order.setdefault(parent_id, []).append(child_id)
 
+    compute_lifecycle(graph, today=today)
     return graph
 
 
 def save_vault(graph: "NodeGraph") -> None:
-    """Sync the full graph topology to disk.
-
-    For each node, rewrites its YAML file's 'how' list to match the current
-    in-memory links. All other fields (description, type, status, unknown keys)
-    are preserved unchanged.
-    """
+    """Sync the full graph topology to disk."""
     for node in graph.nodes.values():
         path = Path(node.filepath)
         raw = yaml.safe_load(path.read_text()) or {}
 
         children = graph.get_children_ids(node.node_id)
         if children:
-            # Use the filename stem as the target_node value (matches load format)
-            child_stems = {}
-            for other in graph.nodes.values():
-                stem = Path(other.filepath).stem
-                child_stems[other.node_id] = stem
-
+            child_stems = {other.node_id: Path(other.filepath).stem for other in graph.nodes.values()}
             raw["how"] = [{"target_node": child_stems[cid]} for cid in children]
         else:
             raw.pop("how", None)

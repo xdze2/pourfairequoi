@@ -1,5 +1,4 @@
 description: Get a guitar
+opened_at: '2026-03-15'
 how:
 - target_node: ZZ0001_go_to_shop
-status: doable
-type: task
