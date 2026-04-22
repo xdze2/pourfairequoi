@@ -254,7 +254,7 @@ class PfqApp(App):
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 
-    # ── Link parent ────────────────────────────────────────────────────────────
+    # ── Link ───────────────────────────────────────────────────────────────────
 
     def action_link_parent(self) -> None:
         if self.current_node_id is None:
@@ -263,21 +263,28 @@ class PfqApp(App):
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
         if row_key not in self.graph.nodes:
             return
+        node_label = self.graph.get_node(row_key).description or row_key
         self.push_screen(
-            NodePickerModal(self.graph, placeholder="› link to parent…", allow_create=True, exclude_id=row_key),
-            lambda result: self._on_link_parent_done(result, row_key),
+            NodePickerModal(self.graph, allow_create=True, exclude_id=row_key, show_direction=True, node_label=node_label),
+            lambda result: self._on_link_done(result, row_key),
         )
 
-    def _on_link_parent_done(self, result: Optional[dict], child_id: str) -> None:
+    def _on_link_done(self, result: Optional[dict], node_id: str) -> None:
         if result is None:
             return
+        direction = result.get("direction", "parent")
         if result["action"] == "create":
-            parent = create_node(result["description"], self.vault_path)
-            self.graph.add_node(parent)
-            parent_id = parent.node_id
-        else:  # "pick"
-            parent_id = result["node_id"]
-        self.graph.link_child(parent_id, child_id, len(self.graph.get_children_ids(parent_id)))
+            other = create_node(result["description"], self.vault_path)
+            self.graph.add_node(other)
+            other_id = other.node_id
+        else:
+            other_id = result["node_id"]
+        if direction == "parent":
+            # node_id becomes child of other_id
+            self.graph.link_child(other_id, node_id, len(self.graph.get_children_ids(other_id)))
+        else:
+            # node_id becomes parent of other_id
+            self.graph.link_child(node_id, other_id, len(self.graph.get_children_ids(node_id)))
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 

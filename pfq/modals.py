@@ -230,12 +230,13 @@ class DeleteModal(ModalScreen):
 
 
 class NodePickerModal(ModalScreen):
-    """Fuzzy node search with grouped results.
+    """Fuzzy node search with grouped results and optional direction toggle.
 
     Dismisses with:
-      {"action": "pick",   "node_id": str}   — a node was selected
-      {"action": "create", "description": str} — only when allow_create=True
-      None                                    — cancelled
+      {"action": "pick",   "node_id": str,      "direction": "parent"|"child"}
+      {"action": "create", "description": str,  "direction": "parent"|"child"}
+        — create only when allow_create=True
+      None — cancelled
     """
 
     CSS = """
@@ -245,9 +246,41 @@ class NodePickerModal(ModalScreen):
     #dialog {
         background: $background;
         border: round $primary;
-        padding: 1 2;
+        padding: 0 0 1 0;
         width: 68;
         height: 24;
+    }
+    #modal-title {
+        background: $primary-darken-2;
+        color: $text;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
+    }
+    #dialog-body {
+        padding: 0 2;
+        height: 1fr;
+    }
+    #dir-label {
+        color: $text-disabled;
+        margin-top: 1;
+    }
+    #direction {
+        height: 1;
+        margin-top: 0;
+        margin-bottom: 1;
+    }
+    #dir-parent, #dir-child {
+        width: 1fr;
+        padding: 0 1;
+        background: $surface;
+        color: $text-disabled;
+        border: none;
+    }
+    #dir-parent.--active, #dir-child.--active {
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
     }
     #results {
         height: 1fr;
@@ -277,36 +310,68 @@ class NodePickerModal(ModalScreen):
         Binding("escape", "cancel", "Cancel"),
         Binding("up", "move_up", "Up", show=False),
         Binding("down", "move_down", "Down", show=False),
+        Binding("tab", "toggle_direction", "Toggle direction", show=False),
     ]
 
     def __init__(
         self,
         graph: NodeGraph,
         *,
-        placeholder: str = "› search nodes…",
         allow_create: bool = False,
         exclude_id: Optional[str] = None,
+        show_direction: bool = False,
+        initial_direction: str = "parent",
+        node_label: str = "",
     ):
         super().__init__()
         self.graph = graph
-        self.placeholder = placeholder
         self.allow_create = allow_create
         self.exclude_id = exclude_id
-        self._matches: list[str] = []   # selectable node_ids in order
+        self.show_direction = show_direction
+        self._direction: str = initial_direction
+        self.node_label = node_label
+        self._matches: list[str] = []
         self._create_shown: bool = False
-        self._selected: int = 0         # index into _matches, or len(_matches) = "create"
+        self._selected: int = 0
+
+    def _short_label(self) -> str:
+        label = self.node_label or self.exclude_id or "node"
+        return label[:28] + "…" if len(label) > 28 else label
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Input(placeholder=self.placeholder, id="widget")
-            yield DataTable(cursor_type="row", show_header=False, id="results")
-            yield Label("↑↓ select  Enter confirm  Esc cancel", id="hint")
+            yield Label(f"Link  {self._short_label()}", id="modal-title")
+            with Vertical(id="dialog-body"):
+                if self.show_direction:
+                    yield Label("direction  [Tab]", id="dir-label")
+                    with Horizontal(id="direction"):
+                        yield Static(id="dir-parent")
+                        yield Static(id="dir-child")
+                yield Input(placeholder="› search nodes…", id="widget")
+                yield DataTable(cursor_type="row", show_header=False, id="results")
+                yield Label("↑↓ select  Enter confirm  Esc cancel", id="hint")
 
     def on_mount(self) -> None:
         t = self.query_one("#results", DataTable)
         t.add_column("row", width=62)
         self.query_one("#widget", Input).focus()
+        self._refresh_direction()
         self._update_results("")
+
+    def _refresh_direction(self) -> None:
+        if not self.show_direction:
+            return
+        name = self._short_label()
+        self.query_one("#dir-parent", Static).update(f"↑ ___  →  {name}")
+        self.query_one("#dir-child",  Static).update(f"↓ {name}  →  ___")
+        self.query_one("#dir-parent").set_class(self._direction == "parent", "--active")
+        self.query_one("#dir-child").set_class(self._direction == "child",  "--active")
+
+    def action_toggle_direction(self) -> None:
+        if not self.show_direction:
+            return
+        self._direction = "child" if self._direction == "parent" else "parent"
+        self._refresh_direction()
 
     def _build_row_text(self, node_id: str, *, is_last: bool) -> Text:
         node = self.graph.get_node(node_id)
@@ -423,9 +488,9 @@ class NodePickerModal(ModalScreen):
             return
         if self._selected == len(self._matches) and self._create_shown:
             query = self.query_one("#widget", Input).value.strip()
-            self.dismiss({"action": "create", "description": query})
+            self.dismiss({"action": "create", "description": query, "direction": self._direction})
         else:
-            self.dismiss({"action": "pick", "node_id": self._matches[self._selected]})
+            self.dismiss({"action": "pick", "node_id": self._matches[self._selected], "direction": self._direction})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
