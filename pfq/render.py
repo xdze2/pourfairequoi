@@ -58,7 +58,10 @@ def _status_rich(
         glyph_style = color or ""
     if mismatch and not color:
         style = f"on {STATUS_MISMATCH_BG}"
-    return Text.from_markup(f"[{glyph_style}]{glyph_str}[/][{style}]{status}[/]")
+    t = Text()
+    t.append(glyph_str, style=glyph_style or None)
+    t.append(status, style=style or None)
+    return t
 
 
 def _tree_prefix_segments(
