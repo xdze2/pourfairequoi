@@ -9,6 +9,7 @@ pip install -e .          # install in editable mode (do this once)
 pfq                       # launch the TUI (default vault: data/)
 pfq /path/to/vault        # open vault at given path (must exist)
 venv/bin/pytest           # run tests
+venv/bin/python screenshot.py   # regenerate screenshots/ SVGs (uses tests/test_vault)
 ```
 
 ## Architecture

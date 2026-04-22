@@ -76,6 +76,16 @@ One YAML file per node in the vault directory. Filename: `{node_id}_{slug}.yaml`
 
 ---
 
+## Screenshots
+
+| Home | Node view | Delete modal |
+|------|-----------|--------------|
+| ![home](screenshots/01_home.svg) | ![node](screenshots/02_node.svg) | ![delete](screenshots/05_delete_modal.svg) |
+
+Regenerate with `venv/bin/python screenshot.py`.
+
+---
+
 ## UI
 
 ### Home page
@@ -120,8 +130,7 @@ The tree connectors are rounded (`╰`, `╭`). Node role symbols are embedded i
 | `e` | Edit focused cell (description, type, status) |
 | `a` | Add child node at cursor |
 | `z` | Link focused node to a parent (search or create) |
-| `d` | Unlink focused node from its visible parent |
-| `D` | Delete node |
+| `d` | Delete / unlink focused node (multi-choice modal) |
 | `Shift+↑` / `Shift+↓` | Reorder children |
 | `y` | Copy current view to clipboard |
 

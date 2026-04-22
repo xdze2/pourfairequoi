@@ -8,6 +8,7 @@ Captures:
     02_node.svg          — node view (first root's first child)
     03_companion.svg     — companion panel open (F2)
     04_edit_modal.svg    — description edit modal
+    05_delete_modal.svg  — delete/unlink multi-choice modal
 
 Output: screenshots/ by default.
 """
@@ -69,6 +70,21 @@ async def capture(vault_path: Path, out: Path) -> None:
             await pilot.pause()
             app.save_screenshot("04_edit_modal.svg", path=str(out))
             click.echo("  ✓ 04_edit_modal.svg")
+            await pilot.press("escape")
+
+        # 5. Delete modal
+        if target_node_id:
+            app._navigate_to(target_node_id)
+            await pilot.pause()
+            # move cursor to a child row if one exists
+            children = app.graph.get_children_ids(target_node_id)
+            if children:
+                await pilot.press("down")
+                await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            app.save_screenshot("05_delete_modal.svg", path=str(out))
+            click.echo("  ✓ 05_delete_modal.svg")
             await pilot.press("escape")
 
 
