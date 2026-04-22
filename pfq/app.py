@@ -102,8 +102,6 @@ class PfqApp(App):
         table.add_column("", key="margin", width=1)
         table.add_column("description", key="desc", width=50)
         table.add_column("also", key="also", width=24)
-        table.add_column("type", key="type", width=0)
-        table.add_column("note", key="note", width=5)
         table.add_column("last", key="last_event", width=8)
         table.add_column("next", key="next_event", width=10)
         yield table

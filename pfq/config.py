@@ -56,20 +56,9 @@ FIELDS: dict[str, dict] = {
         "kind": "text",
         "attr": "description",
     },
-    "type": {
-        "label": "Type",
-        "kind": "select",
-        "attr": "type",
-        "options": NODE_TYPES,
-    },
     "status": {
         "label": "Status",
         "kind": "text",
         "attr": "status",
-    },
-    "note": {
-        "label": "Note",
-        "kind": "textarea",
-        "attr": "note",
     },
 }
