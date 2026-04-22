@@ -8,7 +8,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual.widgets import DataTable
 
-from pfq.config import LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_MISMATCH_BG, STATUS_STYLES
+from pfq.config import INFERRED_STATE_STYLES
 from pfq.view import NodeRole, ViewRow
 
 PALETTE = {
@@ -31,37 +31,18 @@ def _rich(text: str, depth: int) -> Text:
     return t
 
 
-def _status_rich(
-    status: str, depth: int, *, is_leaf: bool = False, is_root: bool = False, indent: int = 0
-) -> Text:
-    """Status cell: colored, glyphed, with mismatch background when role/status disagree."""
-    prefix = "  " * indent
-    if not status:
-        return Text(prefix)
-    s = status.lower()
-    color = STATUS_STYLES.get(s)
-    mismatch = (
-        (is_leaf and s in NODE_STATUSES) or
-        ((is_root or not is_leaf) and s in LEAF_STATUSES)
-    )
-    glyph = STATUS_GLYPHS.get(s, "·" if indent else "")
-    glyph_str = (glyph + " ") if glyph else ""
-    bg = f" on {STATUS_MISMATCH_BG}" if mismatch else ""
+def _state_rich(state: str, depth: int) -> Text:
+    """State cell: colored text based on inferred state name."""
+    if not state:
+        return Text()
+    color = INFERRED_STATE_STYLES.get(state)
     if depth == 0:
-        style      = f"bold {color}{bg}" if color else f"bold{bg}"
-        glyph_style = f"bold {color}"    if color else "bold"
+        style = f"bold {color}" if color else "bold"
     elif depth == 2:
-        style      = f"dim {color}{bg}"  if color else f"dim{bg}"
-        glyph_style = f"dim {color}"     if color else "dim"
+        style = f"dim {color}" if color else "dim"
     else:
-        style      = f"{color}{bg}"      if color else bg
-        glyph_style = color or ""
-    if mismatch and not color:
-        style = f"on {STATUS_MISMATCH_BG}"
-    t = Text()
-    t.append(glyph_str, style=glyph_style or None)
-    t.append(status, style=style or None)
-    return t
+        style = color or ""
+    return Text(state, style=style)
 
 
 def _tree_prefix_segments(
@@ -119,7 +100,7 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row("", "─", Text("root", style="dim"), Text(), Text(), Text(), key="__home__")
+            table.add_row(Text("root", style="dim"), Text(), Text(), Text(), key="__home__")
             continue
         node = row.node
         also_text = (
@@ -127,17 +108,16 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
             if row.also_labels else Text()
         )
         margin = "▶" if row.role == "selected" else ("" if row.role == "home_root" else " ")
-        last_ev = Text(row.last_event, style="dim") if row.last_event else Text()
-        next_ev = Text(row.next_event, style="dim cyan") if row.next_event else Text()
+        when_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
+        activity_text = Text(row.activity_label, style="dim italic") if row.activity_label else Text()
         table.add_row(
-            _status_rich(node.status or "", row.depth,
-                         is_leaf=row.is_leaf, is_root=row.is_root, indent=row.depth),
             margin,
             _desc_cell(row.role, row.depth, node, row.bullet,
                        index=row.index, items=row.items),
             also_text,
-            last_ev,
-            next_ev,
+            when_text,
+            _state_rich(row.state_label, row.depth),
+            activity_text,
             key=node.node_id,
         )
 
@@ -150,18 +130,18 @@ def render_to_text(rows: list[ViewRow]) -> str:
             lines.append("─ root")
             continue
         node = row.node
-        status_suffix = ("  (" + node.status + ")") if node.status else ""
+        state_suffix = ("  (" + row.state_label + ")") if row.state_label else ""
         if row.role == "home_root":
             b = row.bullet
-            lines.append(b + (" " if b else "") + (node.description or "") + status_suffix)
+            lines.append(b + (" " if b else "") + (node.description or "") + state_suffix)
         elif row.role == "selected":
             b = row.bullet
-            lines.append("▶ " + (b + " " if b else "") + (node.description or "") + status_suffix)
+            lines.append("▶ " + (b + " " if b else "") + (node.description or "") + state_suffix)
         else:  # "parent" or "child"
             segs = _tree_prefix_segments(
                 row.depth, row.index, row.items,
                 reverse=(row.role == "parent"), bullet=row.bullet,
             )
             prefix = "".join(s for s, _ in segs)
-            lines.append(prefix + (" " if row.bullet else "") + (node.description or "") + status_suffix)
+            lines.append(prefix + (" " if row.bullet else "") + (node.description or "") + state_suffix)
     return "\n".join(lines)

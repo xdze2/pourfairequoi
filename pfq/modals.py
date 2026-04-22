@@ -10,8 +10,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Label, Select, Static, TextArea
 
-from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_STYLES
-from pfq.model import Event, Node, NodeGraph
+from pfq.config import FIELDS
+from pfq.model import Node, NodeGraph
 
 # Shared CSS for the title-bar modal pattern
 _MODAL_BASE_CSS = """
@@ -403,19 +403,11 @@ class NodePickerModal(ModalScreen):
     def _build_row_text(self, node_id: str, *, is_last: bool) -> Text:
         node = self.graph.get_node(node_id)
         desc = node.description or node_id
-        status = node.status or ""
-        glyph = STATUS_GLYPHS.get(status, "")
-        status_color = STATUS_STYLES.get(status, "#888888")
 
         connector = "╰── " if is_last else "├── "
         row = Text(overflow="ellipsis", no_wrap=True)
         row.append(connector, style="dim")
-        max_desc = 44
-        row.append(desc[:max_desc])
-        if glyph or status:
-            pad = max(1, max_desc - len(desc[:max_desc]) + 2)
-            row.append(" " * pad)
-            row.append(f"{glyph} {status}".rstrip() if glyph else status, style=status_color)
+        row.append(desc[:46])
         return row
 
     def _update_results(self, query: str) -> None:
@@ -523,117 +515,170 @@ class NodePickerModal(ModalScreen):
         self.dismiss(None)
 
 
-# ── Status ─────────────────────────────────────────────────────────────────────
-
-_ROOT_STATUSES = sorted(NODE_STATUSES)
-_NODE_STATUSES = sorted(NODE_STATUSES)
-_LEAF_STATUSES = sorted(LEAF_STATUSES)
-
-_COLUMNS = [
-    ("@ root", _ROOT_STATUSES),
-    ("< node", _NODE_STATUSES),
-    ("○ leaf", _LEAF_STATUSES),
-]
+# ── When ───────────────────────────────────────────────────────────────────────
 
 
-class StatusModal(ModalScreen):
-    """Status editor: three role columns with filter input and free-text entry."""
+def _parse_date(text: str) -> Optional[str]:
+    """Parse a loose date string to ISO format, or None if unparseable."""
+    from datetime import date as _date
+    from pfq.dates import parse_date
+    result = parse_date(text, _date.today())
+    return result.isoformat() if result else None
 
-    CSS = _MODAL_BASE_CSS.format(cls="StatusModal") + """
-    StatusModal #dialog {
-        width: 62;
-    }
-    StatusModal #node-desc {
-        margin-bottom: 1;
-    }
-    StatusModal #widget {
-        margin-bottom: 1;
-    }
-    StatusModal #columns {
-        height: auto;
-        margin-bottom: 1;
-    }
-    StatusModal .col-header {
-        color: $text-disabled;
-        text-style: dim;
-        width: 1fr;
-    }
-    StatusModal .col-body {
-        width: 1fr;
-        height: auto;
-    }
+
+class WhenModal(ModalScreen):
+    """Edit opened_at, estimated_closing_date, update_period with live parse feedback.
+
+    Dismisses with a dict of changed fields, or None on cancel.
     """
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("tab", "pick_suggestion", "Pick", show=False),
-    ]
 
-    def __init__(self, node: Node, graph: NodeGraph):
+    CSS = _MODAL_BASE_CSS.format(cls="WhenModal") + """
+    WhenModal #dialog { width: 58; }
+    WhenModal .field-label { color: $text-muted; margin-top: 1; }
+    WhenModal .parsed { color: $text-muted; margin-top: 0; height: 1; padding-left: 2; }
+    WhenModal .parsed.--ok { color: $success; }
+    WhenModal .parsed.--err { color: $error; }
+    WhenModal #hint { margin-top: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, node: Node):
         super().__init__()
         self.node = node
-        self.graph = graph
 
     def compose(self) -> ComposeResult:
-        is_root = len(self.graph.get_parent_ids(self.node.node_id)) == 0
-        is_leaf = len(self.graph.get_children_ids(self.node.node_id)) == 0
-        bullet = "@" if is_root else ("○" if is_leaf else "<")
         with Vertical(id="dialog"):
-            yield Label("Set status", id="modal-title")
+            yield Label(f"When  {(self.node.description or '')[:36]}", id="modal-title")
             with Vertical(id="dialog-body"):
-                yield Label(f"{bullet}  {self.node.description or ''}", id="node-desc")
-                yield Input(value=self.node.status or "", placeholder="filter…", id="widget")
-                with Horizontal(id="columns"):
-                    for i, (header, _) in enumerate(_COLUMNS):
-                        with Vertical(classes="col-body"):
-                            yield Label(header, classes="col-header")
-                            yield Static(id=f"col-{i}")
-                yield Static(
-                    "[dim]\\[enter] confirm  [/][dim]\\[tab] pick  [/][dim]\\[esc] cancel[/]",
-                    id="hint", markup=True,
-                )
+                yield Label("opened", classes="field-label")
+                yield Input(value=self.node.opened_at or "", placeholder="e.g. 2026-01-01 / last monday", id="inp-opened")
+                yield Static("", id="fb-opened", classes="parsed")
+
+                yield Label("target close", classes="field-label")
+                yield Input(value=self.node.estimated_closing_date or "", placeholder="e.g. june / in 3 months", id="inp-close")
+                yield Static("", id="fb-close", classes="parsed")
+
+                yield Label("check every (days)", classes="field-label")
+                yield Input(value=str(self.node.update_period) if self.node.update_period else "", placeholder="e.g. 7  (leave blank to disable)", id="inp-period")
+                yield Static("", id="fb-period", classes="parsed")
+
+                yield Static("[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
-        self._matches: list[str] = []
-        self._selected: Optional[str] = None
-        inp = self.query_one("#widget", Input)
-        inp.focus()
-        self._refresh_columns(inp.value)
+        self.query_one("#inp-opened", Input).focus()
+        self._refresh_all()
 
-    def _refresh_columns(self, query: str) -> None:
-        q = query.lower().strip()
-        matches = {s for s in STATUS_STYLES if not q or q in s}
-        self._matches = [s for s in STATUS_STYLES if s in matches]
-        if q and self._matches:
-            if self._selected not in self._matches:
-                self._selected = self._matches[0]
+    def _set_feedback(self, widget_id: str, text: str, ok: bool) -> None:
+        w = self.query_one(widget_id, Static)
+        w.update(text)
+        w.set_class(ok, "--ok")
+        w.set_class(not ok and bool(text), "--err")
+
+    def _refresh_feedback(self, input_id: str, feedback_id: str) -> None:
+        value = self.query_one(input_id, Input).value.strip()
+        if not value:
+            self._set_feedback(feedback_id, "", True)
+            return
+        parsed = _parse_date(value)
+        if parsed:
+            self._set_feedback(feedback_id, f"→ {parsed}", True)
         else:
-            self._selected = None
-        for i, (_, statuses) in enumerate(_COLUMNS):
-            col_text = Text()
-            for s in statuses:
-                color = STATUS_STYLES.get(s, "")
-                active = s in matches
-                if active:
-                    prefix = "→ " if s == self._selected else "  "
-                    col_text.append(prefix + s, style=color)
-                else:
-                    col_text.append("  " + s, style=f"{color} strike dim")
-                col_text.append("\n")
-            self.query_one(f"#col-{i}", Static).update(col_text)
+            self._set_feedback(feedback_id, "? unrecognised", False)
+
+    def _refresh_period(self) -> None:
+        value = self.query_one("#inp-period", Input).value.strip()
+        if not value:
+            self._set_feedback("#fb-period", "", True)
+            return
+        try:
+            days = int(value)
+            self._set_feedback("#fb-period", f"→ every {days}d", True)
+        except ValueError:
+            self._set_feedback("#fb-period", "? must be a number", False)
+
+    def _refresh_all(self) -> None:
+        self._refresh_feedback("#inp-opened", "#fb-opened")
+        self._refresh_feedback("#inp-close", "#fb-close")
+        self._refresh_period()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        self._refresh_columns(event.value)
+        if event.input.id == "inp-opened":
+            self._refresh_feedback("#inp-opened", "#fb-opened")
+        elif event.input.id == "inp-close":
+            self._refresh_feedback("#inp-close", "#fb-close")
+        elif event.input.id == "inp-period":
+            self._refresh_period()
+
+    _FIELD_ORDER = ["inp-opened", "inp-close", "inp-period"]
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        value = self._selected or event.value.strip() or None
-        self.dismiss({"attr": "status", "value": value})
+        idx = self._FIELD_ORDER.index(event.input.id)
+        if idx < len(self._FIELD_ORDER) - 1:
+            self.query_one(f"#{self._FIELD_ORDER[idx + 1]}", Input).focus()
+        else:
+            self.action_confirm()
 
-    def action_pick_suggestion(self) -> None:
-        if not self._matches:
-            return
-        inp = self.query_one("#widget", Input)
-        inp.value = self._selected or self._matches[0]
-        inp.action_end()
+    def action_confirm(self) -> None:
+        result = {}
+
+        opened = self.query_one("#inp-opened", Input).value.strip()
+        result["opened_at"] = _parse_date(opened) if opened else None
+
+        close = self.query_one("#inp-close", Input).value.strip()
+        result["estimated_closing_date"] = _parse_date(close) if close else None
+
+        period = self.query_one("#inp-period", Input).value.strip()
+        if period:
+            try:
+                result["update_period"] = int(period)
+            except ValueError:
+                result["update_period"] = self.node.update_period
+        else:
+            result["update_period"] = None
+
+        self.dismiss(result)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── State ──────────────────────────────────────────────────────────────────────
+
+
+class StateModal(ModalScreen):
+    """Toggle open/closed state for a node.
+
+    Dismisses with {"action": "close"} or {"action": "reopen"}, or None on cancel.
+    """
+
+    CSS = _MODAL_BASE_CSS.format(cls="StateModal") + """
+    StateModal #dialog { width: 52; }
+    StateModal #current { color: $text-muted; margin-bottom: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, node: Node):
+        super().__init__()
+        self.node = node
+
+    def compose(self) -> ComposeResult:
+        label = (self.node.description or self.node.node_id)[:40]
+        if self.node.is_closed:
+            action_hint = "Enter  reopen   Esc  cancel"
+            current = f"closed  ·  {self.node.close_reason or 'done'}"
+        else:
+            action_hint = "Enter  close   Esc  cancel"
+            current = "open"
+        with Vertical(id="dialog"):
+            yield Label(label, id="modal-title")
+            with Vertical(id="dialog-body"):
+                yield Static(current, id="current")
+                yield Static(f"[dim]{action_hint}[/]", id="hint", markup=True)
+
+    def on_key(self, event) -> None:
+        if event.key == "enter":
+            event.stop()
+            self.dismiss({"action": "reopen" if self.node.is_closed else "close"})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -706,174 +751,3 @@ class EditModal(ModalScreen):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
-
-
-# ── Timeline ───────────────────────────────────────────────────────────────────
-
-
-class EventEditModal(ModalScreen):
-    """Edit or create a single Event (date, type, text)."""
-
-    CSS = _MODAL_BASE_CSS.format(cls="EventEditModal") + """
-    EventEditModal #dialog { width: 56; }
-    EventEditModal Input { margin-bottom: 1; }
-    """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def __init__(self, event: Optional[Event] = None):
-        super().__init__()
-        self._event = event
-
-    def compose(self) -> ComposeResult:
-        e = self._event
-        title = "Edit event" if e else "Add event"
-        with Vertical(id="dialog"):
-            yield Label(title, id="modal-title")
-            with Vertical(id="dialog-body"):
-                yield Input(value=e.date or "" if e else "", placeholder="date  e.g. 2026-04-21 / april 2027", id="inp-date")
-                yield Input(value=e.type or "" if e else "", placeholder="type  e.g. journal / due_date", id="inp-type")
-                yield Input(value=e.text or "" if e else "", placeholder="description (optional)", id="inp-text")
-                yield Static("[dim]Enter  save   Esc  cancel[/]", id="hint", markup=True)
-
-    def on_mount(self) -> None:
-        self.query_one("#inp-date", Input).focus()
-
-    def on_input_submitted(self, _: Input.Submitted) -> None:
-        raw = self.query_one("#inp-date", Input).value.strip() or None
-        type_val = self.query_one("#inp-type", Input).value.strip() or "journal"
-        text_val = self.query_one("#inp-text", Input).value.strip() or None
-        date_iso, when = self._resolve_date(raw)
-        self.dismiss(Event(type=type_val, date=date_iso, when=when, text=text_val))
-
-    @staticmethod
-    def _resolve_date(raw: Optional[str]):
-        if not raw:
-            return None, None
-        from datetime import date as _date
-        try:
-            _date.fromisoformat(raw)
-            return raw, None  # already ISO — no need to store when
-        except ValueError:
-            pass
-        import dateparser
-        dt = dateparser.parse(raw, settings={"RETURN_AS_TIMEZONE_AWARE": False, "PREFER_DAY_OF_MONTH": "first"})
-        if dt:
-            return dt.date().isoformat(), raw
-        return None, raw  # unparseable — store as when only
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-
-class TimelineModal(ModalScreen):
-    """Browse and edit the timeline of a node.
-
-    Dismisses with the updated list[Event] (possibly unchanged), or None on cancel.
-    """
-
-    CSS = _MODAL_BASE_CSS.format(cls="TimelineModal") + """
-    TimelineModal #dialog {
-        width: 72;
-        height: 24;
-    }
-    TimelineModal #dialog-body {
-        height: 1fr !important;
-    }
-    TimelineModal #table {
-        height: 1fr;
-        background: $background;
-    }
-    TimelineModal #hint { height: 1; }
-    """
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("e", "edit_event", "Edit", show=True),
-        Binding("a", "add_event", "Add", show=True),
-        Binding("D", "delete_event", "Delete", show=True),
-    ]
-
-    def __init__(self, node: Node):
-        super().__init__()
-        self.node = node
-        self._events: list[Event] = list(node.timeline)
-
-    def compose(self) -> ComposeResult:
-        label = (self.node.description or self.node.node_id)[:40]
-        with Vertical(id="dialog"):
-            yield Label(f"Timeline  {label}", id="modal-title")
-            with Vertical(id="dialog-body"):
-                yield DataTable(cursor_type="row", show_header=True, id="table")
-                yield Static("[dim]e edit   a add   D delete   Esc close[/]", id="hint", markup=True)
-
-    def on_mount(self) -> None:
-        t = self.query_one("#table", DataTable)
-        t.add_column("date", key="date", width=16)
-        t.add_column("parsed", key="parsed", width=12)
-        t.add_column("type", key="type", width=12)
-        t.add_column("description", key="desc", width=28)
-        self._rebuild()
-        t.focus()
-
-    def _sorted_events(self) -> list[tuple[int, Event]]:
-        def sort_key(pair):
-            _, e = pair
-            return (e.date is None, e.date or "")
-        return sorted(enumerate(self._events), key=sort_key)
-
-    def _rebuild(self) -> None:
-        t = self.query_one("#table", DataTable)
-        t.clear()
-        pairs = self._sorted_events()
-        for orig_idx, e in pairs:
-            display = e.when if e.when else (e.date or "")
-            resolved = Text(e.date or "?", style="dim" if e.date else "dim red")
-            desc_parts = []
-            if e.text:
-                desc_parts.append(e.text)
-            for k, v in e.extra.items():
-                desc_parts.append(f"{k}: {v}")
-            desc_text = Text(", ".join(desc_parts) if desc_parts else "")
-            t.add_row(Text(display), resolved, Text(e.type), desc_text, key=str(orig_idx))
-
-    def _focused_orig_idx(self) -> Optional[int]:
-        t = self.query_one("#table", DataTable)
-        if t.row_count == 0:
-            return None
-        try:
-            key = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
-            return int(key)
-        except Exception:
-            return None
-
-    def action_edit_event(self) -> None:
-        orig_idx = self._focused_orig_idx()
-        if orig_idx is None:
-            return
-        event = self._events[orig_idx]
-
-        def _on_done(result: Optional[Event]) -> None:
-            if result is not None:
-                self._events[orig_idx] = result
-                self._rebuild()
-            self.query_one("#table", DataTable).focus()
-
-        self.app.push_screen(EventEditModal(event), _on_done)
-
-    def action_add_event(self) -> None:
-        def _on_done(result: Optional[Event]) -> None:
-            if result is not None:
-                self._events.append(result)
-                self._rebuild()
-            self.query_one("#table", DataTable).focus()
-
-        self.app.push_screen(EventEditModal(), _on_done)
-
-    def action_delete_event(self) -> None:
-        orig_idx = self._focused_orig_idx()
-        if orig_idx is None:
-            return
-        self._events.pop(orig_idx)
-        self._rebuild()
-
-    def action_cancel(self) -> None:
-        self.dismiss(self._events)

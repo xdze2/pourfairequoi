@@ -4,21 +4,7 @@ Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
 
 It is a personal knowledge graph — a DAG of nodes where up-links mean generalization and down-links mean decomposition. Tasks are just leaf nodes. Goals are just roots.
 
----
-
-## Philosophy
-
-**Goal: clarity. Means: structure.**
-
-A structure is not a permanent truth — it's how you currently think about something. It can and should evolve. The graph is a first-person instrument, not a universal ontology.
-
-A DAG is a superposition of trees, one per root. Each root is a **perspective anchor** — a seed that radiates meaning downward. The structural position of a node already tells you what kind of thing it is:
-
-- `@` **root** — a seed, a motivation, a point of view. Everything below it exists because of it.
-- middle node — structure, a category, a "how"
-- `○` **leaf** — an atom, an action, something that can be resolved
-
-See [philo.md](philo.md) for the full design thinking.
+See [philo.md](philo.md) for the full design thinking and [design_principles.md](design_principles.md) for the UI/UX principles that guide implementation decisions.
 
 ---
 
@@ -26,87 +12,83 @@ See [philo.md](philo.md) for the full design thinking.
 
 ### Nodes and links
 
-A node is a single unit of thought — a goal, a project, a task, an idea, a constraint. All are the same data structure. The difference is semantic, carried by position in the graph.
+A node is a single unit of thought — a goal, a project, a task, an idea. All share the same structure; their role is determined by position in the graph.
 
-Links are directional: `how` (downward, toward detail/decomposition) and `why` (upward, toward motivation/generalization, derived by reversing `how` links — never stored).
+Links are directional: `how` (downward, decomposition) and `why` (upward, motivation — derived by reversing `how`, never stored).
 
-The graph is a DAG: a node can have multiple parents. This allows the same concept to belong to several perspectives simultaneously.
+The graph is a DAG: a node can have multiple parents, allowing the same concept to belong to several perspectives simultaneously.
 
 ### Node role (derived from structure)
 
 | Symbol | Role | Meaning |
 |--------|------|---------|
 | `@` | root | no parents — a perspective anchor |
-| (none) | middle | has both parents and children — structure |
+| `<` | middle | has both parents and children — structure |
 | `○` | leaf | no children — an actionable atom |
 
-### Node status
+### Node lifecycle
 
-Status is free text, but two vocabularies are suggested depending on the node's structural role:
+A node is either **open** or **closed** (`closed_at` set). Closing is the only state transition that counts as activity.
 
-**Leaf statuses** (actions):
-- `todo` — should be done
-- `doable` — could be done, not urgent
-- `doing` — work in progress
-- `done` — completed
-- `stuck` — blocked, unclear why
-- `waiting` — can't proceed, external dependency
-
-**Root/middle statuses** (concepts, goals):
-- `active` — currently relevant
-- `on hold` — paused
-- `archived` — no longer relevant
-- `someday` — maybe later
-
-Using a leaf status on a root/middle node (or vice versa) is highlighted with a background color — a soft signal, not an error.
-
-### Node fields
+Optional tracking fields:
 
 | Field | Purpose |
 |-------|---------|
-| `description` | The node title — what it is |
-| `type` | Optional classification (`goal`, `project`, `task`, `event`, …) |
-| `status` | Lifecycle state (see vocabularies above) |
-| `note` | Free-form elaboration — the depth dimension of *what* |
+| `opened_at` | When the node became active (user-set, can be past or future) |
+| `closed_at` | When it was closed (set on close) |
+| `close_reason` | `done` or `discarded` |
+| `estimated_closing_date` | Target close date |
+| `update_period` | Check-in cadence in days |
+| `description` | The node title |
+| `comment` | Free-form note |
+
+### Computed fields (not stored)
+
+| Field | Meaning |
+|-------|---------|
+| `_last_active` | Most recent `closed_at` among all descendants (propagated bottom-up) |
+| `_last_update` | Last period boundary: `opened_at + (elapsed // period) * period` |
+| `_is_active` | `_last_active > _last_update` |
+| `_is_overdue` | `today > estimated_closing_date` |
+
+A "scheduled" node is simply open with a future `opened_at` — no special type needed.
 
 ### YAML format
 
 ```yaml
 description: Build a vintage radio
-type: project                        # optional
-status: active
-note: |                              # optional
+opened_at: 2026-01-15
+estimated_closing_date: 2026-06-01
+update_period: 14
+comment: |
   Started from a 1952 Philips chassis.
-  Need to source NOS capacitors.
 
 how:
 - target_node: KLOP45_get_the_case
 - target_node: OAAP11_repair_capacitors
 ```
 
-One YAML file per node in the vault directory. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-character random prefix used for link resolution — the slug is cosmetic.
-
----
-
-## Screenshots
-
-| Home | Node view | Delete modal |
-|------|-----------|--------------|
-| ![home](screenshots/01_home.svg) | ![node](screenshots/02_node.svg) | ![delete](screenshots/05_delete_modal.svg) |
-
-Regenerate with `venv/bin/python screenshot.py`.
+One YAML file per node. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-character random prefix used for link resolution.
 
 ---
 
 ## UI
 
-### Home page
+### Columns
 
-Shows all root nodes (`@`) with type and status.
+| Column | Content | Editable |
+|--------|---------|----------|
+| description | tree + node title | `e` |
+| also | other parents (multi-parent nodes) | — |
+| when | `↻ next-check  → target-close` | `e` |
+| state | `open` / `closed` | `e` |
+| activity | `active` / `forgotten` / `overdue` | read-only |
 
-### Node view
+### Views
 
-Shows the local neighbourhood of the selected node, capped at depth 2 in each direction:
+**Home** — all root nodes (`@`) with their direct children.
+
+**Node view** — local neighbourhood of the selected node, depth 2 in each direction:
 
 ```
 ─ root
@@ -119,50 +101,57 @@ Shows the local neighbourhood of the selected node, capped at depth 2 in each di
   ╰──○ leaf child
 ```
 
-The tree connectors are rounded (`╰`, `╭`). Node role symbols are embedded in the connector terminal:
-- `@ ` prefix on home screen for roots
-- `──<` for middle nodes at depth 2
-- `──○` for leaf nodes at depth 2
-- depth 1 nodes have no bullet — the connector is enough
-
 ### Keyboard shortcuts
 
-#### Navigation
 | Key | Action |
 |-----|--------|
-| `h` | Home page |
-| `Esc` | Go back |
+| `h` | Home |
+| `Esc` | Back |
 | `q` | Quit |
-| `↑` / `↓` | Move cursor |
 | `Enter` | Open node |
-
-#### Editing
-| Key | Action |
-|-----|--------|
-| `e` | Edit focused cell (description, type, status, note) |
-| `a` | Add child node at cursor |
-| `z` | Link focused node to a parent (search or create) |
-| `d` | Delete / unlink focused node (multi-choice modal) |
+| `e` | Edit focused cell |
+| `a` | Add child node |
+| `z` | Link to parent (search or create) |
+| `d` | Delete / unlink (multi-choice modal) |
 | `Shift+↑` / `Shift+↓` | Reorder children |
-| `y` | Copy current view to clipboard |
+| `s` | Search / jump to node |
+| `y` | Copy view to clipboard |
 
-Note editing: move cursor to the `note` column and press `e`. A multiline text editor opens — `ctrl+s` to save, `Esc` to cancel. When a node has a note, a `✎` icon appears in the note column and the note text is shown in a floating card (top-right).
+### Date input (when editing `when`)
+
+The date parser accepts:
+
+| Input | Meaning |
+|-------|---------|
+| `2026-06-01` | ISO date |
+| `today`, `tomorrow`, `yesterday` | named |
+| `3d`, `2w`, `2wk`, `1m`, `1mo`, `1y` | relative future |
+| `in 3d`, `in 2w` | explicit future |
+| `3d ago`, `2w ago`, `1m ago` | relative past |
+| `fri`, `wed` | next occurrence of weekday |
+| `fri 18`, `thu 30` | nearest matching weekday + day |
+| `may 14`, `jun 21` | nearest matching month + day |
+| `jun.`, `apr.` | first of that month (future-preferring) |
+| `jun. 2027` | first of month, specific year |
+
+Live feedback shows the parsed ISO date in green, or `? unrecognised` in red.
 
 ---
 
 ## Architecture
 
-```
-Disk <──> Model <──> UI
-```
+Three-layer separation: **model → view → render**.
 
-All YAML files are loaded into memory at startup into a `NodeGraph`. The UI never touches disk directly — all writes go through `disk_io`.
-
-Key files:
-- `pfq/model.py` — `Node` dataclass, `NodeGraph` (BFS/DFS traversal)
-- `pfq/disk_io.py` — load/save vault, create/delete nodes
-- `pfq/config.py` — status palettes, mismatch vocabularies
-- `pfq/app.py` — Textual TUI
+| File | Role |
+|------|------|
+| `pfq/model.py` | `Node` dataclass, `NodeGraph`, `compute_lifecycle()` |
+| `pfq/disk_io.py` | File I/O: load/save vault, create/delete nodes |
+| `pfq/config.py` | `FIELDS`, `INFERRED_STATE_STYLES` |
+| `pfq/dates.py` | `format_date()`, `parse_date()` — logarithmic precision |
+| `pfq/view.py` | `ViewRow`, `build_node_view()`, `build_home_view()` |
+| `pfq/render.py` | `render_to_table()`, `render_to_text()` |
+| `pfq/modals.py` | All modal screens |
+| `pfq/app.py` | `PfqApp` — navigation, actions, lifecycle |
 
 ---
 
@@ -170,25 +159,10 @@ Key files:
 
 ```bash
 pip install -e .
-pfq                        # open default vault (data/)
-pfq /path/to/vault         # open a specific vault
+pfq                  # open default vault (data/)
+pfq /path/to/vault   # open a specific vault
+venv/bin/pytest      # run tests
 ```
-
----
-
-## Status
-
-- [x] Data model + graph traversal
-- [x] Home page + node view with tree connectors
-- [x] Node role symbols (`@`, `<`, `○`) integrated into connectors
-- [x] Status mismatch highlighting
-- [x] Node editing (description, type, status)
-- [x] Create child node, link to parent, unlink, delete
-- [x] Reorder children
-- [x] Root node creation from home page
-- [x] Copy view to clipboard (`y`)
-- [x] Note field — multiline, per-node, shown in floating card
-- [ ] Search / filter on home page
 
 ---
 

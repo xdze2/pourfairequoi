@@ -5,12 +5,12 @@ All rendering is delegated to render.py; all view-model building to view.py.
 """
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Footer, Static
 
 from pfq.companion import CompanionPanel
@@ -24,7 +24,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StatusModal, TimelineModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StateModal, WhenModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -79,7 +79,6 @@ class PfqApp(App):
         Binding("d", "delete", "Delete"),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
-        Binding("t", "open_timeline", "Timeline"),
         Binding("y", "yank_view", "Copy view"),
         Binding("s", "jump", "Search", show=True),
         Binding("f2", "toggle_companion", "AI", show=True),
@@ -98,12 +97,12 @@ class PfqApp(App):
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
-        table.add_column("status", key="status", width=10)
         table.add_column("", key="margin", width=1)
         table.add_column("description", key="desc", width=50)
         table.add_column("also", key="also", width=24)
-        table.add_column("last", key="last_event", width=8)
-        table.add_column("next", key="next_event", width=10)
+        table.add_column("when", key="when", width=22)
+        table.add_column("state", key="state", width=8)
+        table.add_column("activity", key="activity", width=10)
         yield table
         yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
@@ -165,12 +164,14 @@ class PfqApp(App):
             self._note_panel().load_node(None, None)
             return
         node = self.graph.get_node(row_key)
-        self._note_panel().load_node(node.node_id, node.note)
+        self._note_panel().load_node(node.node_id, node.comment)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         self._update_note_panel()
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        if not self._table().has_focus:
+            return
         row_key = str(event.cell_key.row_key.value)
         if row_key == "__home__":
             self.action_go_home()
@@ -203,50 +204,67 @@ class PfqApp(App):
             return
         node = self.graph.get_node(row_key)
         saved_row = t.cursor_coordinate.row
-        if col_key == "status":
-            self.push_screen(StatusModal(node, self.graph), lambda r: self._on_edit_done(r, saved_row))
+        if FIELDS[col_key]["kind"] == "state":
+            self.push_screen(StateModal(node), lambda r: self._on_state_done(r, row_key, saved_row))
+        elif FIELDS[col_key]["kind"] == "when":
+            self.push_screen(WhenModal(node), lambda r: self._on_when_done(r, row_key, saved_row))
         else:
-            self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, saved_row))
+            self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, row_key, saved_row))
 
-    def _on_edit_done(self, result: Optional[dict], cursor_row: int) -> None:
+    def _on_edit_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
         t = self._table()
         if result is None:
             t.move_cursor(row=cursor_row)
             t.focus()
             return
-        row_key = str(t.coordinate_to_cell_key(Coordinate(cursor_row, 0)).row_key.value)
         node = self.graph.get_node(row_key)
         setattr(node, result["attr"], result["value"])
         save_node_fields(node)
         if self.current_node_id is None:
-            self._show_home()
+            self._show_home(cursor_row=cursor_row)
         else:
-            self._show_node(self.current_node_id, cursor_row=cursor_row)
+            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
         self._update_note_panel()
         t.focus()
 
-    def action_open_timeline(self) -> None:
+    def _on_state_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
         t = self._table()
-        try:
-            cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
-            row_key = str(cell_key.row_key.value)
-        except Exception:
-            return
-        if row_key == "__home__" or row_key not in self.graph.nodes:
+        if result is None:
+            t.focus()
             return
         node = self.graph.get_node(row_key)
-        saved_row = t.cursor_coordinate.row
+        if result["action"] == "close":
+            node.closed_at = date.today().isoformat()
+            node.close_reason = "done"
+        else:
+            node.closed_at = None
+            node.close_reason = None
+        save_node_fields(node)
+        from pfq.model import compute_lifecycle
+        compute_lifecycle(self.graph)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+        t.focus()
 
-        def _on_done(events) -> None:
-            node.timeline = events
-            save_node_fields(node)
-            if self.current_node_id is None:
-                self._show_home(cursor_row=saved_row)
-            else:
-                self._show_node(self.current_node_id, cursor_row=saved_row)
+    def _on_when_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+        t = self._table()
+        if result is None:
             t.focus()
-
-        self.push_screen(TimelineModal(node), _on_done)
+            return
+        node = self.graph.get_node(row_key)
+        node.opened_at = result["opened_at"]
+        node.estimated_closing_date = result["estimated_closing_date"]
+        node.update_period = result["update_period"]
+        save_node_fields(node)
+        from pfq.model import compute_lifecycle
+        compute_lifecycle(self.graph)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+        t.focus()
 
     # ── Append ─────────────────────────────────────────────────────────────────
 

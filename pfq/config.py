@@ -19,4 +19,15 @@ FIELDS: dict[str, dict] = {
         "kind": "textarea",
         "attr": "comment",
     },
+    "state": {
+        "label": "State",
+        "kind": "state",
+        "attr": None,   # handled by StateModal, not a single attr
+    },
+    # "activity" is intentionally absent — computed, not editable
+    "when": {
+        "label": "When",
+        "kind": "when",
+        "attr": None,   # handled by WhenModal, not a single attr
+    },
 }

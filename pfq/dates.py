@@ -1,11 +1,159 @@
-"""Date formatting with logarithmic precision.
+"""Date formatting and parsing with logarithmic precision.
 
 Closer dates get day-level precision; further dates drop to week, month, or year.
 All functions take explicit `today` so they are pure and testable.
 """
 from __future__ import annotations
 
-from datetime import date
+import re
+from datetime import date, timedelta
+from typing import Optional
+
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def parse_date(text: str, today: date) -> Optional[date]:
+    """Parse a short human date string into a date, symmetric with format_date.
+
+    Accepts (case-insensitive):
+      ISO:        2026-06-01
+      Named:      today, tomorrow, yesterday
+      Relative:   3d, 2w, 1m, 1y          (future)
+                  3d ago, 2w ago, 1m ago  (past)
+      Weekday:    fri, sat                 (next occurrence)
+      Weekday+n:  fri 18, thu 30          (nearest matching weekday+day)
+      Month+n:    may 14, jun 21          (nearest matching month+day)
+      Month.:     jun., apr.              (first of that month, future-preferring)
+      Month. yr:  jun. 2027, apr. 2025
+    Returns None if unrecognised.
+    """
+    t = text.strip().lower()
+    if not t:
+        return None
+
+    # ISO
+    try:
+        return date.fromisoformat(t)
+    except ValueError:
+        pass
+
+    # Named
+    if t == "today":
+        return today
+    if t == "tomorrow":
+        return today + timedelta(days=1)
+    if t == "yesterday":
+        return today + timedelta(days=-1)
+
+    # Relative future: 3d / 2w / 2wk / 1m / 1y
+    m = re.fullmatch(r"(\d+)\s*(d|wk|w|mo|m|y)", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if unit == "d":
+            return today + timedelta(days=n)
+        if unit in ("w", "wk"):
+            return today + timedelta(weeks=n)
+        if unit in ("m", "mo"):
+            month = today.month + n
+            year = today.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            day = min(today.day, _month_days(year, month))
+            return date(year, month, day)
+        if unit == "y":
+            return date(today.year + n, today.month, today.day)
+
+    # Relative future explicit: in 2w / in 2wk / in 3m / in 1y
+    m = re.fullmatch(r"in\s+(\d+)\s*(d|wk|w|mo|m|y)", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if unit == "d":
+            return today + timedelta(days=n)
+        if unit in ("w", "wk"):
+            return today + timedelta(weeks=n)
+        if unit in ("m", "mo"):
+            month = today.month + n
+            year = today.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            day = min(today.day, _month_days(year, month))
+            return date(year, month, day)
+        if unit == "y":
+            return date(today.year + n, today.month, today.day)
+
+    # Relative past: 3d ago / 2w ago / 2wk ago / 1m ago / 1y ago
+    m = re.fullmatch(r"(\d+)\s*(d|wk|w|mo|m|y)\s+ago", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if unit == "d":
+            return today - timedelta(days=n)
+        if unit in ("w", "wk"):
+            return today - timedelta(weeks=n)
+        if unit in ("m", "mo"):
+            month = today.month - n
+            year = today.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            day = min(today.day, _month_days(year, month))
+            return date(year, month, day)
+        if unit == "y":
+            return date(today.year - n, today.month, today.day)
+
+    # Weekday only: "fri" → next occurrence (or today if matches)
+    if t in _DAYS:
+        target_dow = _DAYS[t]
+        delta = (target_dow - today.weekday()) % 7
+        return today + timedelta(days=delta or 7)
+
+    # Weekday + day: "fri 18" → nearest future date with that weekday and day
+    m = re.fullmatch(r"([a-z]{3})\s+(\d{1,2})", t)
+    if m and m.group(1) in _DAYS:
+        dow, day = _DAYS[m.group(1)], int(m.group(2))
+        for delta_months in range(0, 13):
+            month = (today.month + delta_months - 1) % 12 + 1
+            year = today.year + (today.month + delta_months - 1) // 12
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                continue
+            if candidate.weekday() == dow and candidate >= today:
+                return candidate
+
+    # Month + day: "may 14"
+    m = re.fullmatch(r"([a-z]{3})\.?\s+(\d{1,2})", t)
+    if m and m.group(1) in _MONTHS:
+        month, day = _MONTHS[m.group(1)], int(m.group(2))
+        for year in (today.year, today.year + 1):
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                continue
+            if candidate >= today:
+                return candidate
+
+    # Month. only: "jun." → first of that month, future-preferring
+    m = re.fullmatch(r"([a-z]{3})\.", t)
+    if m and m.group(1) in _MONTHS:
+        month = _MONTHS[m.group(1)]
+        candidate = date(today.year, month, 1)
+        if candidate < today:
+            candidate = date(today.year + 1, month, 1)
+        return candidate
+
+    # Month. year: "jun. 2027"
+    m = re.fullmatch(r"([a-z]{3})\.\s+(\d{4})", t)
+    if m and m.group(1) in _MONTHS:
+        return date(int(m.group(2)), _MONTHS[m.group(1)], 1)
+
+    return None
+
+
+def _month_days(year: int, month: int) -> int:
+    """Return the number of days in a given month."""
+    if month == 12:
+        return (date(year + 1, 1, 1) - date(year, 12, 1)).days
+    return (date(year, month + 1, 1) - date(year, month, 1)).days
 
 
 def format_date(d: date, today: date) -> str:
