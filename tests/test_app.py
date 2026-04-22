@@ -1,5 +1,7 @@
 """Tests for pfq.app — TUI behaviour."""
 
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,14 @@ VAULT = Path(__file__).parent / "test_vault"
 @pytest.fixture
 def app():
     return PfqApp(vault_path=VAULT)
+
+
+@pytest.fixture
+def tmp_app(tmp_path):
+    """Fresh app backed by a temporary copy of the vault — safe for destructive tests."""
+    vault = tmp_path / "vault"
+    shutil.copytree(VAULT, vault)
+    return PfqApp(vault_path=vault)
 
 
 # ── Home page ──────────────────────────────────────────────────────────────────
@@ -156,3 +166,75 @@ async def test_back_from_home_does_nothing(app):
         await pilot.pause()
         assert app.current_node_id is None
         assert len(app.history) == history_before
+
+
+# ── Delete actions ─────────────────────────────────────────────────────────────
+
+
+async def test_unlink_removes_link_keeps_nodes(tmp_app):
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        tmp_app._navigate_to("AB0002")
+        await pilot.pause()
+        tmp_app._on_delete_done("unlink", "AC0003", ("AB0002", "AC0003"), 0)
+        await pilot.pause()
+        assert "AC0003" in tmp_app.graph.nodes
+        assert "AB0002" in tmp_app.graph.nodes
+        from pfq.model import Link
+        assert Link("AB0002", "AC0003") not in tmp_app.graph.links
+
+
+async def test_delete_node_removes_it(tmp_app):
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        tmp_app._navigate_to("AB0002")
+        await pilot.pause()
+        tmp_app._on_delete_done("node", "AC0003", None, 0)
+        await pilot.pause()
+        assert "AC0003" not in tmp_app.graph.nodes
+
+
+async def test_delete_soft_removes_unanchored(tmp_app):
+    # deleting AB0002: AC0003 becomes unanchored → also removed
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        tmp_app._navigate_to("AA0001")
+        await pilot.pause()
+        tmp_app._on_delete_done("soft", "AB0002", None, 0)
+        await pilot.pause()
+        assert "AB0002" not in tmp_app.graph.nodes
+        assert "AC0003" not in tmp_app.graph.nodes
+
+
+async def test_delete_soft_keeps_shared_node(tmp_app):
+    # deleting AB0003: ZZ0001 has BB0002 as second parent → stays
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        tmp_app._navigate_to("AA0001")
+        await pilot.pause()
+        tmp_app._on_delete_done("soft", "AB0003", None, 0)
+        await pilot.pause()
+        assert "AB0003" not in tmp_app.graph.nodes
+        assert "ZZ0001" in tmp_app.graph.nodes
+
+
+async def test_delete_navigating_away_goes_to_history(tmp_app):
+    # deleting the currently viewed node navigates back
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        tmp_app._navigate_to("AA0001")
+        await pilot.pause()
+        tmp_app._navigate_to("AB0002")
+        await pilot.pause()
+        tmp_app._on_delete_done("node", "AB0002", None, 0)
+        await pilot.pause()
+        assert tmp_app.current_node_id == "AA0001"
+
+
+async def test_delete_from_home_stays_home(tmp_app):
+    async with tmp_app.run_test() as pilot:
+        await pilot.pause()
+        assert tmp_app.current_node_id is None
+        tmp_app._on_delete_done("node", "CA0001", None, 0)
+        await pilot.pause()
+        assert tmp_app.current_node_id is None

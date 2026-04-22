@@ -140,13 +140,9 @@ class NodeGraph:
     def nodes_unanchored_after_removal(self, node_ids: set) -> set:
         """Return nodes that would lose all paths to any root if node_ids were removed."""
         remaining = set(self.nodes.keys()) - node_ids
-        # roots in the remaining graph: no parent within remaining
+        # Seed BFS from nodes that are roots in the original graph and survive removal
         reachable: set[str] = set()
-        queue = [
-            nid for nid in remaining
-            if not any(lnk.child_id == nid and lnk.parent_id in remaining
-                       for lnk in self.links)
-        ]
+        queue = [nid for nid in remaining if not self.get_parent_ids(nid)]
         while queue:
             nid = queue.pop()
             if nid in reachable:

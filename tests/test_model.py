@@ -136,3 +136,49 @@ def test_childrens_tree_shared_node_appears_once(graph):
     tree = graph.get_childrens_tree("BA0001")
     zz_entries = [(n, d) for n, d in tree if n.node_id == "ZZ0001"]
     assert len(zz_entries) == 1
+
+
+# ── deletion_set ───────────────────────────────────────────────────────────────
+#
+# Vault topology (abbreviated):
+#   AA0001 → AB0002 → AC0003
+#          → AB0003 → ZZ0001 ← BB0002 ← BA0001
+#   CA0001  (isolated root)
+
+
+def test_deletion_set_node(graph):
+    assert graph.deletion_set("AB0002", "node") == {"AB0002"}
+
+
+def test_deletion_set_soft_unanchored_child(graph):
+    # AC0003 has only AB0002 as parent → becomes unanchored
+    assert graph.deletion_set("AB0002", "soft") == {"AB0002", "AC0003"}
+
+
+def test_deletion_set_soft_shared_child_stays(graph):
+    # ZZ0001 has BB0002 as second parent → stays anchored
+    assert graph.deletion_set("AB0003", "soft") == {"AB0003"}
+
+
+def test_deletion_set_hard(graph):
+    # hard ignores other parents — ZZ0001 included even though BB0002 also links it
+    assert graph.deletion_set("AB0003", "hard") == {"AB0003", "ZZ0001"}
+
+
+def test_deletion_set_hard_leaf(graph):
+    assert graph.deletion_set("AC0003", "hard") == {"AC0003"}
+
+
+def test_nodes_unanchored_after_removal_root(graph):
+    # removing AA0001: AB0002, AB0003, AC0003 lose all root paths
+    # ZZ0001 survives via BB0002 → BA0001
+    unanchored = graph.nodes_unanchored_after_removal({"AA0001"})
+    assert "AB0002" in unanchored
+    assert "AB0003" in unanchored
+    assert "AC0003" in unanchored
+    assert "ZZ0001" not in unanchored
+
+
+def test_nodes_unanchored_after_removal_shared_node(graph):
+    # removing AB0003 only: ZZ0001 still reachable via BB0002
+    assert "ZZ0001" not in graph.nodes_unanchored_after_removal({"AB0003"})
