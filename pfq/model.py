@@ -136,3 +136,56 @@ class NodeGraph:
 
     def get_childrens_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
         return self._dfs_tree(node_id, self.get_children_ids, max_depth)
+
+    def nodes_unanchored_after_removal(self, node_ids: set) -> set:
+        """Return nodes that would lose all paths to any root if node_ids were removed."""
+        remaining = set(self.nodes.keys()) - node_ids
+        # roots in the remaining graph: no parent within remaining
+        reachable: set[str] = set()
+        queue = [
+            nid for nid in remaining
+            if not any(lnk.child_id == nid and lnk.parent_id in remaining
+                       for lnk in self.links)
+        ]
+        while queue:
+            nid = queue.pop()
+            if nid in reachable:
+                continue
+            reachable.add(nid)
+            queue.extend(
+                lnk.child_id for lnk in self.links
+                if lnk.parent_id == nid and lnk.child_id in remaining
+            )
+        return remaining - reachable
+
+    def deletion_set(self, node_id: str, mode: str) -> set:
+        """Compute the set of node_ids to delete for a given mode.
+
+        mode "node" : only the node itself
+        mode "soft" : node + whatever becomes unanchored after its removal
+        mode "hard" : node + all descendants (full DFS, ignoring other parents)
+        """
+        if mode == "node":
+            return {node_id}
+        if mode == "soft":
+            initial = {node_id}
+            # iterate: newly unanchored nodes may themselves unanchor more
+            to_delete = initial
+            while True:
+                unanchored = self.nodes_unanchored_after_removal(to_delete)
+                new_set = to_delete | unanchored
+                if new_set == to_delete:
+                    break
+                to_delete = new_set
+            return to_delete
+        if mode == "hard":
+            result = {node_id}
+            stack = list(self.get_children_ids(node_id))
+            while stack:
+                nid = stack.pop()
+                if nid in result:
+                    continue
+                result.add(nid)
+                stack.extend(self.get_children_ids(nid))
+            return result
+        raise ValueError(f"Unknown mode: {mode}")

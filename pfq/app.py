@@ -74,8 +74,7 @@ class PfqApp(App):
         Binding("e", "edit_node", "Edit"),
         Binding("a", "append_node", "Append"),
         Binding("z", "link_parent", "Link parent"),
-        Binding("d", "delete_link", "Unlink"),
-        Binding("D", "delete_node", "Delete node"),
+        Binding("d", "delete", "Delete"),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
         Binding("y", "yank_view", "Copy view"),
@@ -112,23 +111,31 @@ class PfqApp(App):
 
     # ── Views ──────────────────────────────────────────────────────────────────
 
-    def _show_home(self) -> None:
+    def _show_home(self, *, cursor_row: Optional[int] = None) -> None:
         self.current_node_id = None
+        col = self._table().cursor_coordinate.column
         rows = build_home_view(self.graph)
         self._last_view = rows
         render_to_table(rows, self._table())
+        if cursor_row is not None:
+            self._table().move_cursor(row=min(cursor_row, len(rows) - 1), column=col)
 
-    def _show_node(self, node_id: str, *, cursor_row: Optional[int] = None) -> None:
+    def _show_node(self, node_id: str, *, cursor_row: Optional[int] = None, cursor_node_id: Optional[str] = None) -> None:
         self.current_node_id = node_id
         col = self._table().cursor_coordinate.column
         rows = build_node_view(self.graph, node_id)
         self._last_view = rows
         render_to_table(rows, self._table())
         selected_row = next(i for i, r in enumerate(rows) if r.role == "selected")
-        self._table().move_cursor(
-            row=cursor_row if cursor_row is not None else selected_row,
-            column=col,
-        )
+        if cursor_node_id is not None:
+            # try to land on the same node; fall back to previous row position
+            found = next((i for i, r in enumerate(rows) if r.node and r.node.node_id == cursor_node_id), None)
+            target = found if found is not None else min(cursor_row or 0, len(rows) - 1)
+        elif cursor_row is not None:
+            target = min(cursor_row, len(rows) - 1)
+        else:
+            target = selected_row
+        self._table().move_cursor(row=max(0, target), column=col)
 
     # ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -330,65 +337,137 @@ class PfqApp(App):
         else:
             panel.stop_thinking()
 
-    # ── Delete link / Delete node ───────────────────────────────────────────────
+    # ── Delete ─────────────────────────────────────────────────────────────────
 
-    def action_delete_link(self) -> None:
-        if self.current_node_id is None:
-            return
-        t = self._table()
-        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
-        if row_key in (self.current_node_id, "__home__") or row_key not in self.graph.nodes:
-            return
-        parent_id = next(
-            (r.visible_parent_id for r in self._last_view
-             if r.node and r.node.node_id == row_key and r.role == "child"),
-            None,
-        )
-        if parent_id is None:
-            return
-        parent_label = self.graph.get_node(parent_id).description or parent_id
-        child_label = self.graph.get_node(row_key).description or row_key
-        self.push_screen(
-            DeleteModal(f'{child_label}  (unlink from "{parent_label}")'),
-            lambda confirmed: self._on_unlink_confirmed(confirmed, parent_id, row_key),
-        )
-
-    def _on_unlink_confirmed(self, confirmed: bool, parent_id: str, child_id: str) -> None:
-        if not confirmed:
-            return
-        self.graph.unlink_child(parent_id, child_id)
-        save_vault(self.graph)
-        self._show_node(self.current_node_id)
-
-    def action_delete_node(self) -> None:
+    def action_delete(self) -> None:
         t = self._table()
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
         if row_key == "__home__" or row_key not in self.graph.nodes:
             return
+
+        focused_row = next(
+            (r for r in self._last_view if r.node and r.node.node_id == row_key), None
+        )
+        if focused_row is None:
+            return
+
+        if focused_row.role == "sentinel":
+            return
+
         node = self.graph.get_node(row_key)
+        node_label = node.description or row_key
+
+        # unlink_pair: (parent_id, child_id) of the link to cut, or None
+        if focused_row.role == "child" and focused_row.visible_parent_id:
+            unlink_pair = (focused_row.visible_parent_id, row_key)
+        elif focused_row.role == "parent" and self.current_node_id:
+            unlink_pair = (row_key, self.current_node_id)
+        else:
+            unlink_pair = None
+
+        saved_cursor_row = self._table().cursor_coordinate.row
+
+        options = self._build_delete_options(row_key, unlink_pair)
         self.push_screen(
-            DeleteModal(node.description or row_key),
-            lambda confirmed: self._on_delete_confirmed(confirmed, row_key),
+            DeleteModal(node_label, options),
+            lambda result: self._on_delete_done(result, row_key, unlink_pair, saved_cursor_row),
         )
 
-    def _on_delete_confirmed(self, confirmed: bool, node_id: str) -> None:
-        if not confirmed:
+    def _build_delete_options(self, node_id: str, unlink_pair: Optional[tuple]) -> list:
+        options = []
+
+        if unlink_pair is not None:
+            parent_id, child_id = unlink_pair
+            other_id = child_id if child_id != node_id else parent_id
+            other_label = self.graph.get_node(other_id).description or other_id
+            options.append({
+                "key": "unlink",
+                "label": f'Unlink from "{other_label}"',
+                "detail": "Both nodes stay — only this link is removed.",
+                "nodes": [],
+            })
+
+        orphans = [
+            self.graph.get_node(nid).description or nid
+            for nid in self.graph.get_children_ids(node_id)
+            if len(self.graph.get_parent_ids(nid)) == 1
+        ]
+        orphan_note = f"{len(orphans)} {'child' if len(orphans) == 1 else 'children'} will become unanchored." if orphans else "No other nodes affected."
+        options.append({
+            "key": "node",
+            "label": "Delete node",
+            "detail": orphan_note,
+            "nodes": [],
+        })
+
+        soft_set = self.graph.deletion_set(node_id, "soft")
+        if len(soft_set) > 1:
+            soft_nodes = [
+                self.graph.get_node(nid).description or nid
+                for nid in soft_set if nid != node_id
+            ]
+            options.append({
+                "key": "soft",
+                "label": f"Delete + remove unanchored  ({len(soft_set)} nodes)",
+                "detail": "Also removes nodes that would lose all paths to a root.",
+                "nodes": soft_nodes,
+            })
+
+        hard_set = self.graph.deletion_set(node_id, "hard")
+        if len(hard_set) > 1:
+            hard_nodes = [
+                self.graph.get_node(nid).description or nid
+                for nid in hard_set if nid != node_id
+            ]
+            options.append({
+                "key": "hard",
+                "label": f"Delete subtree  ({len(hard_set)} nodes)",
+                "detail": "Removes all descendants regardless of other parents.",
+                "nodes": hard_nodes,
+            })
+
+        return options
+
+    def _on_delete_done(self, result: Optional[str], node_id: str, unlink_pair: Optional[tuple], cursor_row: int) -> None:
+        if result is None:
             return
-        node = self.graph.get_node(node_id)
-        navigating_away = node_id == self.current_node_id
-        self.graph.remove_node(node_id)
+
+        if result == "unlink":
+            if unlink_pair is None:
+                return
+            parent_id, child_id = unlink_pair
+            self.graph.unlink_child(parent_id, child_id)
+            save_vault(self.graph)
+            # node stays in graph — seek it by id; cursor_row is the fallback
+            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=node_id)
+            return
+
+        if result == "node":
+            self._delete_nodes({node_id}, cursor_row)
+            return
+
+        if result in ("soft", "hard"):
+            self._delete_nodes(self.graph.deletion_set(node_id, result), cursor_row)
+            return
+
+    def _delete_nodes(self, node_ids: set, cursor_row: int = 0) -> None:
+        navigating_away = self.current_node_id in node_ids
+        for nid in node_ids:
+            node = self.graph.get_node(nid)
+            self.graph.remove_node(nid)
+            delete_node_file(node)
         save_vault(self.graph)
-        delete_node_file(node)
         if navigating_away:
-            if self.history:
-                prev = self.history.pop()
-                if prev is None or prev not in self.graph.nodes:
-                    self._show_home()
-                else:
-                    self._show_node(prev)
+            prev = next(
+                (p for p in reversed(self.history) if p is not None and p not in node_ids),
+                None,
+            )
+            self.history = [p for p in self.history if p not in node_ids]
+            if prev and prev in self.graph.nodes:
+                self._show_node(prev)
             else:
                 self._show_home()
         elif self.current_node_id is None:
-            self._show_home()
+            self._show_home(cursor_row=cursor_row)
         else:
-            self._show_node(self.current_node_id)
+            self._show_node(self.current_node_id, cursor_row=cursor_row)

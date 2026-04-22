@@ -67,7 +67,17 @@ class CreateModal(ModalScreen):
 
 
 class DeleteModal(ModalScreen):
-    """Confirmation prompt before deleting or unlinking a node."""
+    """Multi-choice delete/unlink modal.
+
+    options: list of dicts with keys:
+        key       str   action identifier returned on confirm
+        label     str   short title
+        detail    str   consequence description
+        nodes     list[str]  node descriptions affected (shown for soft/hard)
+
+    Navigated with ↑↓, confirmed with Enter. soft/hard ask a second confirmation.
+    Dismisses with the chosen option key, or None on cancel.
+    """
 
     CSS = """
     DeleteModal {
@@ -77,36 +87,143 @@ class DeleteModal(ModalScreen):
         background: $background;
         border: round $error;
         padding: 1 2;
-        width: 52;
+        width: 62;
         height: auto;
     }
-    #dialog Label {
+    #title {
+        color: $error;
+        text-style: bold;
         margin-bottom: 1;
+    }
+    .option {
+        border: round $surface-lighten-2;
+        padding: 0 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+    .option.--selected {
+        border: round $error;
+        background: $surface-lighten-1;
+    }
+    .option-label {
+        color: $text;
+        text-style: bold;
+        margin-top: 0;
+    }
+    .option-detail {
+        color: $text-muted;
+        padding-left: 1;
+    }
+    .option-nodes {
+        color: $text-disabled;
+        padding-left: 1;
     }
     #hint {
         color: $text-muted;
+        margin-top: 1;
+    }
+    #confirm-dialog {
+        background: $background;
+        border: round $error;
+        padding: 1 2;
+        width: 60;
+        height: auto;
+    }
+    #confirm-title {
+        margin-bottom: 1;
+    }
+    #confirm-hint {
+        color: $text-muted;
+        margin-top: 1;
     }
     """
     BINDINGS = [
-        Binding("y", "confirm", "Yes, delete"),
-        Binding("n", "cancel", "Cancel"),
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
+        Binding("enter", "confirm", "Confirm"),
         Binding("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, node_label: str):
+    def __init__(self, node_label: str, options: list[dict]):
         super().__init__()
         self.node_label = node_label
+        self.options = options
+        self._selected = 0
+        self._confirming = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f'Delete "{self.node_label}" ?')
-            yield Label("\\[y] confirm    \\[n / Esc] cancel", id="hint")
+            yield Label(f"Delete  {self.node_label}", id="title")
+            for i, opt in enumerate(self.options):
+                with Vertical(classes="option", id=f"opt-{i}"):
+                    yield Static(opt["label"], id=f"opt-label-{i}", classes="option-label")
+                    yield Static(opt["detail"], classes="option-detail")
+                    if opt.get("nodes"):
+                        preview = opt["nodes"][:5]
+                        extra = len(opt["nodes"]) - len(preview)
+                        lines = "\n".join(f"  ○ {n}" for n in preview)
+                        if extra:
+                            lines += f"\n  … and {extra} more"
+                        yield Static(lines, classes="option-nodes")
+            yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        for i in range(len(self.options)):
+            container = self.query_one(f"#opt-{i}", Vertical)
+            if i == self._selected:
+                container.add_class("--selected")
+            else:
+                container.remove_class("--selected")
+
+    def action_move_up(self) -> None:
+        self._selected = (self._selected - 1) % len(self.options)
+        self._refresh()
+
+    def action_move_down(self) -> None:
+        self._selected = (self._selected + 1) % len(self.options)
+        self._refresh()
 
     def action_confirm(self) -> None:
-        self.dismiss(True)
+        opt = self.options[self._selected]
+        if opt["key"] in ("soft", "hard") and not self._confirming:
+            self._confirming = True
+            self._show_confirmation(opt)
+        else:
+            self.dismiss(opt["key"])
+
+    def _show_confirmation(self, opt: dict) -> None:
+        n = len(opt.get("nodes", []))
+        msg = f"Delete {n} node{'s' if n != 1 else ''}? This cannot be undone."
+
+        class ConfirmScreen(ModalScreen):
+            BINDINGS = [
+                Binding("enter", "yes", "Yes"),
+                Binding("escape", "no", "Cancel"),
+            ]
+
+            def compose(self_inner) -> ComposeResult:
+                with Vertical(id="confirm-dialog"):
+                    yield Label(f"[bold red]{opt['label']}[/]  —  {msg}", id="confirm-title", markup=True)
+                    yield Static("[dim]Enter confirm   Esc cancel[/]", id="confirm-hint", markup=True)
+
+            def action_yes(self_inner) -> None:
+                self_inner.dismiss(True)
+
+            def action_no(self_inner) -> None:
+                self_inner.dismiss(False)
+
+        def _on_confirm(result: bool) -> None:
+            self._confirming = False
+            if result:
+                self.dismiss(opt["key"])
+
+        self.app.push_screen(ConfirmScreen(), _on_confirm)
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        self.dismiss(None)
 
 
 # ── Link ───────────────────────────────────────────────────────────────────────
