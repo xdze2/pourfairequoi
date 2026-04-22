@@ -165,6 +165,70 @@ It produces one question and 3-4 choices, each mapping to a concrete action
 
 ---
 
+## UI
+
+### Table layout
+
+The main view stays a table with 2D keyboard navigation. Event nodes are rows like
+any other — same tree connectors, same `e` to edit. No side panel, no separate
+timeline view.
+
+Four columns:
+
+```
+[ events margin ] [ tree + description ] [ when ] [ inferred state ]
+```
+
+- **events margin** (left) — narrow, dimmed column for secondary-parent connectors
+  and possibly event row annotations. Reuses the concept from `improve_2nd_why_display.md`.
+- **tree + description** — connectors + node description, as today.
+- **when** — single column, source depends on row type:
+  - event node → shows `date` (relative: "3mo ago", "in 6w")
+  - regular node → shows `next_due_date` ("every 2w", "in 6w", blank if off)
+- **inferred state** — computed badge + optional inner voice question.
+
+### Event rows
+
+Event nodes render differently from regular nodes — dimmed, date-first:
+
+```
+│  ○  Build the vintage radio           every 2w   ⚠ forgotten   │
+│     ├──○ Source the NOS capacitors                              │
+│     ├╌ 3mo ago   spent 2h on the chassis                        │
+│     ├╌ in 6w     fablab visit  [due]                            │
+│     ╰╌ 2d ago    done  ✓                                        │
+```
+
+The `╌` connector signals "event row, not a structural child". Other columns are
+left blank for event rows — they don't participate in the column grid.
+
+### Editing the `when` column
+
+`e` on the `when` cell opens a modal. The modal title and field differ by row type:
+
+```
+event node:    [ date: 2026-06-01      ]   (edit when this happened/will happen)
+regular node:  [ check back: every 2w  ]   (edit next_due_date cadence)
+```
+
+Same key, same column, semantically parallel: both answer "when is the relevant
+moment for this node?"
+
+### Relative dates
+
+Dates are stored as ISO strings, displayed as relative for readability:
+
+```
+2026-04-20  →  "3mo ago"
+2026-06-01  →  "in 6w"
+2026-04-22  →  "2d ago"
+```
+
+Vague dates ("april 2026", "Q3") shown as-is. Relative display means no fixed
+column width — event rows opt out of strict alignment anyway.
+
+---
+
 ## What this replaces
 
 - `status` field — replaced by `is_closed` + inferred state from event children
