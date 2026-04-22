@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Label, Select, Static
 
-from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_STYLES
+from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_STYLES
 from pfq.model import Node, NodeGraph
 
 # ── Create ─────────────────────────────────────────────────────────────────────
@@ -359,6 +359,183 @@ class LinkModal(ModalScreen):
             node_id, _ = self._matches[self._selected]
             self.dismiss({"action": "link", "node_id": node_id})
         elif not self._matches and not query:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── Jump ───────────────────────────────────────────────────────────────────────
+
+
+class JumpModal(ModalScreen):
+    """Global node search — type to fuzzy-search, Enter to navigate."""
+
+    CSS = """
+    JumpModal {
+        align: center middle;
+    }
+    #dialog {
+        background: $background;
+        border: round $primary;
+        padding: 1 2;
+        width: 68;
+        height: 24;
+    }
+    #results {
+        height: 1fr;
+        overflow-y: auto;
+        overflow-x: hidden;
+        margin-top: 1;
+        background: $background;
+    }
+    #results > .datatable--cursor {
+        background: #2e2600;
+        color: #f0ead0;
+    }
+    #hint {
+        color: $text-muted;
+        height: 1;
+        margin-top: 1;
+    }
+    #widget {
+        border: tall $primary-darken-2;
+        background: $panel;
+    }
+    #widget:focus {
+        border: tall $primary;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
+    ]
+
+    def __init__(self, graph: NodeGraph):
+        super().__init__()
+        self.graph = graph
+        self._matches: list[str] = []  # node_ids in display order
+        self._selected: int = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Input(placeholder="› search nodes…", id="widget")
+            yield DataTable(cursor_type="row", show_header=False, id="results")
+            yield Label("↑↓ select  Enter go  Esc cancel", id="hint")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#results", DataTable)
+        t.add_column("row", width=62)
+        self.query_one("#widget", Input).focus()
+        self._update_results("")
+
+    def _default_nodes(self) -> list[str]:
+        """Return root node ids, same order as home view."""
+        return self.graph.get_roots()
+
+    def _parent_label(self, node_id: str) -> str:
+        parent_ids = self.graph.get_parent_ids(node_id)
+        if not parent_ids:
+            return ""
+        parent = self.graph.get_node(parent_ids[0])
+        desc = parent.description or parent_ids[0]
+        return desc[:22] + "…" if len(desc) > 22 else desc
+
+    def _build_row_text(self, node_id: str, *, is_last: bool) -> Text:
+        node = self.graph.get_node(node_id)
+        desc = node.description or node_id
+        status = node.status or ""
+        glyph = STATUS_GLYPHS.get(status, "")
+        status_color = STATUS_STYLES.get(status, "#888888")
+
+        connector = "╰── " if is_last else "├── "
+        row = Text(overflow="ellipsis", no_wrap=True)
+        row.append(connector, style="dim")
+        max_desc = 44
+        row.append(desc[:max_desc], style="")
+        if glyph or status:
+            pad = max(1, max_desc - len(desc[:max_desc]) + 2)
+            row.append(" " * pad)
+            row.append(f"{glyph} {status}".rstrip() if glyph else status, style=status_color)
+        return row
+
+    def _update_results(self, query: str) -> None:
+        t = self.query_one("#results", DataTable)
+        t.clear()
+        self._matches = []
+        self._selected = 0
+
+        if query.strip():
+            nodes = self.graph.search_nodes(query)[:16]
+        else:
+            root_ids = self._default_nodes()
+            nodes = [self.graph.get_node(nid) for nid in root_ids]
+
+        # Group by first parent (None = root / no parent)
+        groups: dict[Optional[str], list[str]] = {}
+        for node in nodes:
+            parent_ids = self.graph.get_parent_ids(node.node_id)
+            key = parent_ids[0] if parent_ids else None
+            groups.setdefault(key, []).append(node.node_id)
+
+        sep_counter = 0
+        for parent_id, node_ids in groups.items():
+            # Header row — styled like a parent in the tree view
+            if parent_id is None:
+                header = Text("@ roots", style="dim")
+            else:
+                p = self.graph.get_node(parent_id)
+                label = (p.description or parent_id)[:54]
+                header = Text(label, style="dim")
+            t.add_row(header, key=f"__sep__{sep_counter}")
+            sep_counter += 1
+
+            for i, node_id in enumerate(node_ids):
+                self._matches.append(node_id)
+                is_last = (i == len(node_ids) - 1)
+                t.add_row(self._build_row_text(node_id, is_last=is_last), key=node_id)
+
+        self._highlight()
+
+    def _selectable_row_index(self, match_index: int) -> int:
+        """Return the DataTable row index for a given _matches index, skipping sep rows."""
+        t = self.query_one("#results", DataTable)
+        target_id = self._matches[match_index]
+        try:
+            return t.get_row_index(target_id)
+        except Exception:
+            return 0
+
+    def _highlight(self) -> None:
+        t = self.query_one("#results", DataTable)
+        if not self._matches or t.row_count == 0:
+            return
+        row = self._selectable_row_index(max(0, min(self._selected, len(self._matches) - 1)))
+        t.move_cursor(row=row)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._update_results(event.value)
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.action_confirm()
+
+    def action_move_up(self) -> None:
+        if not self._matches:
+            return
+        self._selected = (self._selected - 1) % len(self._matches)
+        self._highlight()
+
+    def action_move_down(self) -> None:
+        if not self._matches:
+            return
+        self._selected = (self._selected + 1) % len(self._matches)
+        self._highlight()
+
+    def action_confirm(self) -> None:
+        if self._matches and 0 <= self._selected < len(self._matches):
+            self.dismiss(self._matches[self._selected])
+        else:
             self.dismiss(None)
 
     def action_cancel(self) -> None:

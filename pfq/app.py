@@ -23,12 +23,13 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, LinkModal, StatusModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, JumpModal, LinkModal, StatusModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
 
 class PfqApp(App):
+    ENABLE_COMMAND_PALETTE = False
     TITLE = "pfq"
     LAYERS = ["default", "overlay"]
     CSS = f"""
@@ -78,6 +79,7 @@ class PfqApp(App):
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
         Binding("y", "yank_view", "Copy view"),
+        Binding("s", "jump", "Search", show=True),
         Binding("f2", "toggle_companion", "AI", show=True),
     ]
 
@@ -308,6 +310,15 @@ class PfqApp(App):
 
     def action_reorder_down(self) -> None:
         self._action_reorder(1)
+
+    # ── Jump ───────────────────────────────────────────────────────────────────
+
+    def action_jump(self) -> None:
+        def _on_jump(node_id: Optional[str]) -> None:
+            if node_id:
+                self._navigate_to(node_id)
+
+        self.push_screen(JumpModal(self.graph), _on_jump)
 
     # ── Yank ───────────────────────────────────────────────────────────────────
 
