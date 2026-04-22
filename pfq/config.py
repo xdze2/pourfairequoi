@@ -67,4 +67,9 @@ FIELDS: dict[str, dict] = {
         "kind": "text",
         "attr": "status",
     },
+    "note": {
+        "label": "Note",
+        "kind": "textarea",
+        "attr": "note",
+    },
 }

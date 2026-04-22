@@ -119,7 +119,7 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row("", "─", Text("root", style="dim"), Text(), "", key="__home__")
+            table.add_row("", "─", Text("root", style="dim"), Text(), "", Text(), key="__home__")
             continue
         node = row.node
         also_text = (
@@ -127,6 +127,7 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
             if row.also_labels else Text()
         )
         margin = "▶" if row.role == "selected" else ("" if row.role == "home_root" else " ")
+        note_icon = Text("✎", style="dim") if node.note else Text()
         table.add_row(
             _status_rich(node.status or "", row.depth,
                          is_leaf=row.is_leaf, is_root=row.is_root, indent=row.depth),
@@ -135,6 +136,7 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
                        index=row.index, items=row.items),
             also_text,
             _rich(node.type or "", row.depth),
+            note_icon,
             key=node.node_id,
         )
 

@@ -60,12 +60,24 @@ Status is free text, but two vocabularies are suggested depending on the node's 
 
 Using a leaf status on a root/middle node (or vice versa) is highlighted with a background color — a soft signal, not an error.
 
+### Node fields
+
+| Field | Purpose |
+|-------|---------|
+| `description` | The node title — what it is |
+| `type` | Optional classification (`goal`, `project`, `task`, `event`, …) |
+| `status` | Lifecycle state (see vocabularies above) |
+| `note` | Free-form elaboration — the depth dimension of *what* |
+
 ### YAML format
 
 ```yaml
 description: Build a vintage radio
 type: project                        # optional
 status: active
+note: |                              # optional
+  Started from a 1952 Philips chassis.
+  Need to source NOS capacitors.
 
 how:
 - target_node: KLOP45_get_the_case
@@ -127,12 +139,14 @@ The tree connectors are rounded (`╰`, `╭`). Node role symbols are embedded i
 #### Editing
 | Key | Action |
 |-----|--------|
-| `e` | Edit focused cell (description, type, status) |
+| `e` | Edit focused cell (description, type, status, note) |
 | `a` | Add child node at cursor |
 | `z` | Link focused node to a parent (search or create) |
 | `d` | Delete / unlink focused node (multi-choice modal) |
 | `Shift+↑` / `Shift+↓` | Reorder children |
 | `y` | Copy current view to clipboard |
+
+Note editing: move cursor to the `note` column and press `e`. A multiline text editor opens — `ctrl+s` to save, `Esc` to cancel. When a node has a note, a `✎` icon appears in the note column and the note text is shown in a floating card (top-right).
 
 ---
 
@@ -173,6 +187,7 @@ pfq /path/to/vault         # open a specific vault
 - [x] Reorder children
 - [x] Root node creation from home page
 - [x] Copy view to clipboard (`y`)
+- [x] Note field — multiline, per-node, shown in floating card
 - [ ] Search / filter on home page
 
 ---

@@ -15,6 +15,7 @@ from textual.widgets import DataTable, Footer, Static
 
 from pfq.companion import CompanionPanel
 from pfq.config import FIELDS
+from pfq.note_panel import NotePanel
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
     create_node,
@@ -101,12 +102,15 @@ class PfqApp(App):
         table.add_column("description", key="desc", width=50)
         table.add_column("also", key="also", width=24)
         table.add_column("type", key="type", width=0)
+        table.add_column("note", key="note", width=5)
         yield table
+        yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
         yield Footer()
 
     def on_mount(self) -> None:
         self._show_home()
+        self._update_note_panel()
 
     def _table(self) -> DataTable:
         return self.query_one(DataTable)
@@ -144,6 +148,26 @@ class PfqApp(App):
     def _navigate_to(self, node_id: str) -> None:
         self.history.append(self.current_node_id)
         self._show_node(node_id)
+
+    def _note_panel(self) -> NotePanel:
+        return self.query_one("#note-panel", NotePanel)
+
+    def _update_note_panel(self) -> None:
+        t = self._table()
+        try:
+            cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
+            row_key = str(cell_key.row_key.value)
+        except Exception:
+            self._note_panel().load_node(None, None)
+            return
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            self._note_panel().load_node(None, None)
+            return
+        node = self.graph.get_node(row_key)
+        self._note_panel().load_node(node.node_id, node.note)
+
+    def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
+        self._update_note_panel()
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         row_key = str(event.cell_key.row_key.value)
@@ -197,6 +221,7 @@ class PfqApp(App):
             self._show_home()
         else:
             self._show_node(self.current_node_id, cursor_row=cursor_row)
+        self._update_note_panel()
         t.focus()
 
     # ── Append ─────────────────────────────────────────────────────────────────

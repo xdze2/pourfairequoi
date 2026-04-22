@@ -27,6 +27,7 @@ Three-layer separation: **model → view → render**.
 | `pfq/view.py` | `ViewRow` dataclass + `build_node_view()` + `build_home_view()` |
 | `pfq/render.py` | `render_to_table()`, `render_to_text()`, Rich text helpers |
 | `pfq/modals.py` | All modal screens: `CreateModal`, `DeleteModal`, `LinkModal`, `StatusModal`, `EditModal` |
+| `pfq/note_panel.py` | `NotePanel` — floating display card for the cursor node's note |
 | `pfq/companion.py` | `CompanionPanel` — HAL-style inner voice widget |
 | `pfq/app.py` | `PfqApp` — navigation, actions, lifecycle only |
 | `pfq/__main__.py` | Click CLI entry point |
@@ -97,10 +98,19 @@ Neither function takes a `NodeGraph` argument — all graph-derived data is in `
 `EditModal` looks up `FIELDS[col_key]` and renders one widget:
 - `kind: "text"` → `Input`, dismissed on `Enter`
 - `kind: "select"` → `Select`, auto-dismissed on change
+- `kind: "textarea"` → `TextArea`, dismissed on `ctrl+s`
 
 After dismiss, `_on_edit_done` calls `setattr(node, attr, value)` then `save_node_fields(node)`.
 
 To add a new editable field: add one entry to `FIELDS` in `config.py`. No changes needed elsewhere.
+
+## Note panel (`note_panel.py`)
+
+`NotePanel` is a display-only widget docked top-right (layer: overlay). It shows the `note` field of whichever node the table cursor is on. It is hidden when the cursor node has no note.
+
+Updated via `_update_note_panel()` in `app.py`, called from `on_data_table_cell_highlighted` and after `_on_edit_done`.
+
+The `note` column in the table shows a `✎` icon when a node has a note. Editing is done via `e` on the note column — same modal flow as other fields, using `kind: "textarea"`.
 
 ## Linking (`z` key — `LinkModal`)
 

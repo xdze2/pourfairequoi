@@ -56,7 +56,7 @@ def save_node_fields(node: "Node") -> None:
     The 'how' links and any unknown fields are preserved as-is."""
     path = Path(node.filepath)
     raw = yaml.safe_load(path.read_text()) or {}
-    for field in ("description", "type", "status"):
+    for field in ("description", "type", "status", "note"):
         value = getattr(node, field)
         if value:
             raw[field] = value
@@ -81,6 +81,7 @@ def load_vault(vault_path: Path) -> "NodeGraph":
             description=raw.get("description"),
             type=raw.get("type"),
             status=raw.get("status"),
+            note=raw.get("note"),
             filepath=str(path),
         )
 

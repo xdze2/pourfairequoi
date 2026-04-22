@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Input, Label, Select, Static
+from textual.widgets import DataTable, Input, Label, Select, Static, TextArea
 
 from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_STYLES
 from pfq.model import Node, NodeGraph
@@ -649,8 +649,19 @@ class EditModal(ModalScreen):
     EditModal #dialog {
         width: 52;
     }
+    EditModal TextArea {
+        height: 8;
+        border: tall $primary-darken-2;
+        background: $panel;
+    }
+    EditModal TextArea:focus {
+        border: tall $primary;
+    }
     """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "submit_textarea", "Save", show=False),
+    ]
 
     def __init__(self, node: Node, col_key: str):
         super().__init__()
@@ -667,6 +678,9 @@ class EditModal(ModalScreen):
                     options = self.field["options"]
                     extra = {"value": current} if current in options else {}
                     yield Select([(o, o) for o in options], allow_blank=True, id="widget", **extra)
+                elif self.field["kind"] == "textarea":
+                    yield TextArea(current, id="widget")
+                    yield Static("[dim]ctrl+s  save  [/][dim]esc  cancel[/]", id="hint", markup=True)
                 else:
                     yield Input(value=current, id="widget")
                     yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
@@ -684,6 +698,11 @@ class EditModal(ModalScreen):
         options = self.field.get("options", [])
         value = event.value if event.value in options else None
         self._dismiss_with_value(value)
+
+    def action_submit_textarea(self) -> None:
+        if self.field["kind"] == "textarea":
+            value = self.query_one("#widget", TextArea).text.strip()
+            self._dismiss_with_value(value)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

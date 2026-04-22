@@ -37,6 +37,7 @@ class Node:
     description: str = None
     type: str = None
     status: str = None
+    note: str = None
     filepath: str = None
 
 
