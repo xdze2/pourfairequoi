@@ -1,3 +1,5 @@
 description: Add history to node, log (todo app)
 how:
 - target_node: DSVR19_brainstorm_idea
+- target_node: HSR7J9_go_for_events_in_node
+status: doable
