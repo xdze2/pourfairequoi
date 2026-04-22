@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, NamedTuple, Optional
 
 
@@ -32,6 +32,15 @@ class Link(NamedTuple):
 
 
 @dataclass
+class Event:
+    type: str
+    date: str = None   # ISO date string (machine-readable, resolved at save time)
+    when: str = None   # raw user input e.g. "tomorrow", "april 2027" (display only)
+    text: str = None
+    extra: dict = field(default_factory=dict)  # catches unknown keys (from, to, etc.)
+
+
+@dataclass
 class Node:
     node_id: str
     description: str = None
@@ -39,6 +48,7 @@ class Node:
     status: str = None
     note: str = None
     filepath: str = None
+    timeline: list = field(default_factory=list)  # list[Event]
 
 
 class NodeGraph:

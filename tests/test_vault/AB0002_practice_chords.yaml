@@ -1,5 +1,5 @@
 description: Practice chords
-type: task
-status: todo
 how:
 - target_node: AC0003_find_tutorials
+status: todo
+type: task

@@ -3,4 +3,8 @@ how:
 - target_node: LTE2I3_text_export
 - target_node: SX51IR_horizontal_links_or_before_after
 - target_node: 1TXEQZ_git_integration
+- target_node: P4XFPB_event_first_data_mutable_graph
 status: someday
+timeline:
+- date: today
+  type: journal

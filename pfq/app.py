@@ -24,7 +24,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StatusModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StatusModal, TimelineModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -79,6 +79,7 @@ class PfqApp(App):
         Binding("d", "delete", "Delete"),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
+        Binding("t", "open_timeline", "Timeline"),
         Binding("y", "yank_view", "Copy view"),
         Binding("s", "jump", "Search", show=True),
         Binding("f2", "toggle_companion", "AI", show=True),
@@ -103,6 +104,8 @@ class PfqApp(App):
         table.add_column("also", key="also", width=24)
         table.add_column("type", key="type", width=0)
         table.add_column("note", key="note", width=5)
+        table.add_column("last", key="last_event", width=8)
+        table.add_column("next", key="next_event", width=10)
         yield table
         yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
@@ -223,6 +226,29 @@ class PfqApp(App):
             self._show_node(self.current_node_id, cursor_row=cursor_row)
         self._update_note_panel()
         t.focus()
+
+    def action_open_timeline(self) -> None:
+        t = self._table()
+        try:
+            cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
+            row_key = str(cell_key.row_key.value)
+        except Exception:
+            return
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            return
+        node = self.graph.get_node(row_key)
+        saved_row = t.cursor_coordinate.row
+
+        def _on_done(events) -> None:
+            node.timeline = events
+            save_node_fields(node)
+            if self.current_node_id is None:
+                self._show_home(cursor_row=saved_row)
+            else:
+                self._show_node(self.current_node_id, cursor_row=saved_row)
+            t.focus()
+
+        self.push_screen(TimelineModal(node), _on_done)
 
     # ── Append ─────────────────────────────────────────────────────────────────
 

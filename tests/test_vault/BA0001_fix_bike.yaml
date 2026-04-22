@@ -1,5 +1,14 @@
 description: Fix bike
-type: project
 how:
 - target_node: BB0002_buy_inner_tube
 - target_node: BB0003_check_brakes
+timeline:
+- date: '2026-01-10'
+  type: created
+- date: '2026-03-15'
+  text: bought the tools
+  type: journal
+- date: '2026-05-01'
+  type: due_date
+  when: end of april
+type: project

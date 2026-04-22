@@ -8,3 +8,6 @@ how:
 - target_node: K17TMA_side_links_after_before_or
 - target_node: HGGYTT_web_version
 - target_node: N2EG6T_market_analysis
+timeline:
+- date: 06-06-2026
+  type: journal

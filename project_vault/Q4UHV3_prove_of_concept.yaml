@@ -1,3 +1,7 @@
 description: Prove of Concept
 how:
 - target_node: BR2NC6_version_1
+timeline:
+- date: tomorrow
+  text: ARGH
+  type: due

@@ -8,11 +8,71 @@ dependency.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Literal, Optional
 
 from pfq.model import Node, NodeGraph
 
 NodeRole = Literal["parent", "selected", "child", "home_root", "sentinel"]
+
+
+def _parse_iso(s: str) -> Optional[date]:
+    try:
+        return date.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _relative_label(d: date, today: date) -> str:
+    delta = (d - today).days
+    if delta < 0:
+        if delta >= -1:
+            return "yesterday"
+        if delta >= -6:
+            return f"{-delta}d ago"
+        if delta >= -30:
+            return f"{(-delta) // 7}w ago"
+        return f"{(-delta) // 30}mo ago"
+    if delta == 0:
+        return "today"
+    if delta == 1:
+        return "tomorrow"
+    if delta <= 6:
+        return f"in {delta}d"
+    if delta <= 30:
+        return f"in {delta // 7}w"
+    return f"in {delta // 30}mo"
+
+
+def _last_event_label(node: Node, today: date) -> str:
+    best: Optional[date] = None
+    for event in node.timeline:
+        if event.type == "due_date":
+            continue
+        d = _parse_iso(event.date or "")
+        if d and d <= today and (best is None or d > best):
+            best = d
+    if best is None:
+        return ""
+    return _relative_label(best, today)
+
+
+def _next_event_label(node: Node, today: date) -> str:
+    best_date: Optional[date] = None
+    best_label: Optional[str] = None
+    for event in node.timeline:
+        if event.type != "due_date":
+            continue
+        d = _parse_iso(event.date or "")
+        if d is not None and d >= today:
+            if best_date is None or d < best_date:
+                best_date = d
+                best_label = event.when or event.date
+        elif not best_date and (event.when or event.date):
+            best_label = best_label or event.when or event.date
+    if best_date is not None:
+        return _relative_label(best_date, today)
+    return best_label or ""
 
 
 @dataclass
@@ -28,6 +88,8 @@ class ViewRow:
     items: list = field(default_factory=list)   # [(Node, int)] peer group
     visible_parent_id: Optional[str] = None
     also_labels: list[str] = field(default_factory=list)  # other-parent descriptions
+    last_event: str = ""   # relative label of most recent past event in branch
+    next_event: str = ""   # relative label of nearest upcoming due_date in branch
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -58,12 +120,15 @@ def _make_row(
     if visible_parent_id is not None:
         others = [p for p in graph.get_parent_ids(node.node_id) if p != visible_parent_id]
         also_labels = [graph.get_node(p).description or p for p in others]
+    today = date.today()
     return ViewRow(
         role=role, depth=depth, node=node,
         is_leaf=is_leaf, is_root=is_root,
         bullet=_bullet(is_root, is_leaf, depth),
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
+        last_event=_last_event_label(node, today),
+        next_event=_next_event_label(node, today),
     )
 
 

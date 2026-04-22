@@ -10,3 +10,7 @@ how:
 - target_node: TB5TUH_re_order_child_node
 - target_node: EUK7G2_poc_on_advanced_features
 status: active
+timeline:
+- date: '2026-05-01'
+  text: YEAH
+  type: milestone

@@ -11,7 +11,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Label, Select, Static, TextArea
 
 from pfq.config import FIELDS, LEAF_STATUSES, NODE_STATUSES, STATUS_GLYPHS, STATUS_STYLES
-from pfq.model import Node, NodeGraph
+from pfq.model import Event, Node, NodeGraph
 
 # Shared CSS for the title-bar modal pattern
 _MODAL_BASE_CSS = """
@@ -706,3 +706,174 @@ class EditModal(ModalScreen):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# ── Timeline ───────────────────────────────────────────────────────────────────
+
+
+class EventEditModal(ModalScreen):
+    """Edit or create a single Event (date, type, text)."""
+
+    CSS = _MODAL_BASE_CSS.format(cls="EventEditModal") + """
+    EventEditModal #dialog { width: 56; }
+    EventEditModal Input { margin-bottom: 1; }
+    """
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, event: Optional[Event] = None):
+        super().__init__()
+        self._event = event
+
+    def compose(self) -> ComposeResult:
+        e = self._event
+        title = "Edit event" if e else "Add event"
+        with Vertical(id="dialog"):
+            yield Label(title, id="modal-title")
+            with Vertical(id="dialog-body"):
+                yield Input(value=e.date or "" if e else "", placeholder="date  e.g. 2026-04-21 / april 2027", id="inp-date")
+                yield Input(value=e.type or "" if e else "", placeholder="type  e.g. journal / due_date", id="inp-type")
+                yield Input(value=e.text or "" if e else "", placeholder="description (optional)", id="inp-text")
+                yield Static("[dim]Enter  save   Esc  cancel[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        self.query_one("#inp-date", Input).focus()
+
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        raw = self.query_one("#inp-date", Input).value.strip() or None
+        type_val = self.query_one("#inp-type", Input).value.strip() or "journal"
+        text_val = self.query_one("#inp-text", Input).value.strip() or None
+        date_iso, when = self._resolve_date(raw)
+        self.dismiss(Event(type=type_val, date=date_iso, when=when, text=text_val))
+
+    @staticmethod
+    def _resolve_date(raw: Optional[str]):
+        if not raw:
+            return None, None
+        from datetime import date as _date
+        try:
+            _date.fromisoformat(raw)
+            return raw, None  # already ISO — no need to store when
+        except ValueError:
+            pass
+        import dateparser
+        dt = dateparser.parse(raw, settings={"RETURN_AS_TIMEZONE_AWARE": False, "PREFER_DAY_OF_MONTH": "first"})
+        if dt:
+            return dt.date().isoformat(), raw
+        return None, raw  # unparseable — store as when only
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class TimelineModal(ModalScreen):
+    """Browse and edit the timeline of a node.
+
+    Dismisses with the updated list[Event] (possibly unchanged), or None on cancel.
+    """
+
+    CSS = _MODAL_BASE_CSS.format(cls="TimelineModal") + """
+    TimelineModal #dialog {
+        width: 72;
+        height: 24;
+    }
+    TimelineModal #dialog-body {
+        height: 1fr !important;
+    }
+    TimelineModal #table {
+        height: 1fr;
+        background: $background;
+    }
+    TimelineModal #hint { height: 1; }
+    """
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("e", "edit_event", "Edit", show=True),
+        Binding("a", "add_event", "Add", show=True),
+        Binding("D", "delete_event", "Delete", show=True),
+    ]
+
+    def __init__(self, node: Node):
+        super().__init__()
+        self.node = node
+        self._events: list[Event] = list(node.timeline)
+
+    def compose(self) -> ComposeResult:
+        label = (self.node.description or self.node.node_id)[:40]
+        with Vertical(id="dialog"):
+            yield Label(f"Timeline  {label}", id="modal-title")
+            with Vertical(id="dialog-body"):
+                yield DataTable(cursor_type="row", show_header=True, id="table")
+                yield Static("[dim]e edit   a add   D delete   Esc close[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        t = self.query_one("#table", DataTable)
+        t.add_column("date", key="date", width=16)
+        t.add_column("parsed", key="parsed", width=12)
+        t.add_column("type", key="type", width=12)
+        t.add_column("description", key="desc", width=28)
+        self._rebuild()
+        t.focus()
+
+    def _sorted_events(self) -> list[tuple[int, Event]]:
+        def sort_key(pair):
+            _, e = pair
+            return (e.date is None, e.date or "")
+        return sorted(enumerate(self._events), key=sort_key)
+
+    def _rebuild(self) -> None:
+        t = self.query_one("#table", DataTable)
+        t.clear()
+        pairs = self._sorted_events()
+        for orig_idx, e in pairs:
+            display = e.when if e.when else (e.date or "")
+            resolved = Text(e.date or "?", style="dim" if e.date else "dim red")
+            desc_parts = []
+            if e.text:
+                desc_parts.append(e.text)
+            for k, v in e.extra.items():
+                desc_parts.append(f"{k}: {v}")
+            desc_text = Text(", ".join(desc_parts) if desc_parts else "")
+            t.add_row(Text(display), resolved, Text(e.type), desc_text, key=str(orig_idx))
+
+    def _focused_orig_idx(self) -> Optional[int]:
+        t = self.query_one("#table", DataTable)
+        if t.row_count == 0:
+            return None
+        try:
+            key = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
+            return int(key)
+        except Exception:
+            return None
+
+    def action_edit_event(self) -> None:
+        orig_idx = self._focused_orig_idx()
+        if orig_idx is None:
+            return
+        event = self._events[orig_idx]
+
+        def _on_done(result: Optional[Event]) -> None:
+            if result is not None:
+                self._events[orig_idx] = result
+                self._rebuild()
+            self.query_one("#table", DataTable).focus()
+
+        self.app.push_screen(EventEditModal(event), _on_done)
+
+    def action_add_event(self) -> None:
+        def _on_done(result: Optional[Event]) -> None:
+            if result is not None:
+                self._events.append(result)
+                self._rebuild()
+            self.query_one("#table", DataTable).focus()
+
+        self.app.push_screen(EventEditModal(), _on_done)
+
+    def action_delete_event(self) -> None:
+        orig_idx = self._focused_orig_idx()
+        if orig_idx is None:
+            return
+        self._events.pop(orig_idx)
+        self._rebuild()
+
+    def action_cancel(self) -> None:
+        self.dismiss(self._events)

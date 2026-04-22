@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import re
 import string
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -35,15 +36,59 @@ def _new_filepath(description: str, vault: Path) -> Path:
 # ── Node file operations ──────────────────────────────────────────────────────
 
 
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _events_from_raw(raw_timeline) -> list:
+    from pfq.model import Event
+    if not raw_timeline:
+        return []
+    events = []
+    for entry in raw_timeline:
+        if not isinstance(entry, dict):
+            continue
+        known = {"type", "date", "when", "text"}
+        extra = {k: v for k, v in entry.items() if k not in known}
+        events.append(Event(
+            type=entry.get("type", ""),
+            date=str(entry["date"]) if entry.get("date") is not None else None,
+            when=str(entry["when"]) if entry.get("when") is not None else None,
+            text=entry.get("text"),
+            extra=extra,
+        ))
+    return events
+
+
+def _events_to_raw(events: list) -> list:
+    raw = []
+    for e in events:
+        entry = {"type": e.type}
+        if e.date is not None:
+            entry["date"] = e.date
+        if e.when is not None:
+            entry["when"] = e.when
+        if e.text:
+            entry["text"] = e.text
+        entry.update(e.extra)
+        raw.append(entry)
+    return raw
+
+
 def create_node(description: str, vault: Path) -> "Node":
     """Create a new YAML file and return the Node (not yet linked to anything)."""
-    from pfq.model import Node
+    from pfq.model import Event, Node
 
     path = _new_filepath(description, vault)
     node_id = filename_to_node_id(path.stem)
-    raw = {"description": description}
+    created_event = Event(type="created", date=_today())
+    raw = {
+        "description": description,
+        "timeline": _events_to_raw([created_event]),
+    }
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
-    return Node(node_id=node_id, description=description, filepath=str(path))
+    return Node(node_id=node_id, description=description, filepath=str(path),
+                timeline=[created_event])
 
 
 def delete_node_file(node: "Node") -> None:
@@ -52,16 +97,35 @@ def delete_node_file(node: "Node") -> None:
 
 
 def save_node_fields(node: "Node") -> None:
-    """Persist description, type, status back to the node's YAML file.
+    """Persist description, type, status, note, timeline back to the node's YAML file.
     The 'how' links and any unknown fields are preserved as-is."""
+    from pfq.model import Event
+
     path = Path(node.filepath)
     raw = yaml.safe_load(path.read_text()) or {}
-    for field in ("description", "type", "status", "note"):
-        value = getattr(node, field)
+
+    old_status = raw.get("status")
+    new_status = node.status
+
+    for f in ("description", "type", "status", "note"):
+        value = getattr(node, f)
         if value:
-            raw[field] = value
+            raw[f] = value
         else:
-            raw.pop(field, None)
+            raw.pop(f, None)
+
+    if old_status != new_status:
+        node.timeline.append(Event(
+            type="status_change",
+            date=_today(),
+            extra={"from": old_status, "to": new_status},
+        ))
+
+    if node.timeline:
+        raw["timeline"] = _events_to_raw(node.timeline)
+    else:
+        raw.pop("timeline", None)
+
     path.write_text(yaml.dump(raw, allow_unicode=True, default_flow_style=False))
 
 
@@ -83,6 +147,7 @@ def load_vault(vault_path: Path) -> "NodeGraph":
             status=raw.get("status"),
             note=raw.get("note"),
             filepath=str(path),
+            timeline=_events_from_raw(raw.get("timeline")),
         )
 
     for path in sorted(vault_path.glob("*.yaml")):

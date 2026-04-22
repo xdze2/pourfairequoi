@@ -1,1 +1,5 @@
 description: node comment field
+timeline:
+- date: today
+  text: test
+  type: journal

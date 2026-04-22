@@ -11,3 +11,7 @@ how:
 - target_node: 0NOK59_home_page_clean_roots_view
 - target_node: S9ZE67_add_link_as_children
 - target_node: IC0MLT_filter_view_on_status
+timeline:
+- date: today
+  text: work
+  type: journal
