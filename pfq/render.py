@@ -117,7 +117,7 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
             table.add_row(Text(), Text("  ─ root", style="dim"), Text(), Text(), key="__home__")
             continue
         node = row.node
-        due_text = Text(row.due_label, style="dim cyan") if row.due_label else Text()
+        due_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
         update_text = Text(row.update_label, style="dim") if row.update_label else Text()
         table.add_row(
             _state_rich(row.status_label, row.depth),

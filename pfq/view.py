@@ -50,7 +50,16 @@ def _due_label(node: Node, today: date) -> str:
     if node.estimated_closing_date:
         d = _parse_iso(node.estimated_closing_date)
         if d is not None:
-            return "→ " + format_date(d, today)
+            delta = (d - today).days
+            if delta < 14:
+                glyph = "→"
+            elif delta < 60:
+                glyph = "⇒"
+            elif delta < 365:
+                glyph = "☽"
+            else:
+                glyph = "☀"
+            return f"{glyph} {format_date(d, today)}"
     return ""
 
 
@@ -91,7 +100,7 @@ class ViewRow:
     items: list = field(default_factory=list)   # [(Node, int)] peer group
     visible_parent_id: Optional[str] = None
     also_labels: list[str] = field(default_factory=list)  # other-parent descriptions
-    due_label: str = ""     # target close date (or closed_at + duration)
+    when_label: str = ""    # target close date (or closed_at + duration)
     update_label: str = ""  # next check-in date
     status_label: str = ""  # merged: closed reason or computed activity
 
@@ -131,7 +140,7 @@ def _make_row(
         bullet=_bullet(is_root, is_leaf, depth),
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
-        due_label=_due_label(node, today),
+        when_label=_due_label(node, today),
         update_label=_update_label(node, today),
         status_label=_status_label(node),
     )

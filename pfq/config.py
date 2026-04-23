@@ -32,8 +32,8 @@ FIELDS: dict[str, dict] = {
         "kind": "state",
         "attr": None,   # handled by StateModal, not a single attr
     },
-    "due": {
-        "label": "Due",
+    "when": {
+        "label": "When",
         "kind": "when",
         "attr": None,
     },

@@ -99,7 +99,7 @@ class PfqApp(App):
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("status", key="status", width=12)
         table.add_column("description", key="desc", width=36)
-        table.add_column("due", key="due", width=16)
+        table.add_column("when", key="when", width=16)
         table.add_column("update", key="update", width=12)
         yield table
         yield NotePanel(id="note-panel")
