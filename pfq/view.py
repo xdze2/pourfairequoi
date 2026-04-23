@@ -25,12 +25,34 @@ def _parse_iso(s: str) -> Optional[date]:
 
 
 def _when_label(node: Node, today: date) -> str:
-    """Build the 'when' cell: next check + target close, both formatted."""
-    parts = []
+    """Build the 'when' cell.
 
+    Closed: "closed_at  (duration)"  e.g. "apr. 2025  (3w)"
+    Open:   "↻ next-check  → target-close"
+    """
+    if node.is_closed:
+        closed = _parse_iso(node.closed_at)
+        if closed is None:
+            return ""
+        parts = [format_date(closed, today)]
+        opened = _parse_iso(node.opened_at)
+        if opened is not None:
+            days = (closed - opened).days
+            if days < 1:
+                duration = "same day"
+            elif days < 7:
+                duration = f"{days}d"
+            elif days < 28:
+                duration = f"{days // 7}w"
+            elif days < 365:
+                duration = f"{days // 30}mo"
+            else:
+                duration = f"{days // 365}y"
+            parts.append(f"({duration})")
+        return "  ".join(parts)
+
+    parts = []
     if node._last_update is not None:
-        next_check = node._last_update
-        # advance one period to get the next deadline
         from datetime import timedelta
         next_check = node._last_update + timedelta(days=node.update_period)
         parts.append("↻ " + format_date(next_check, today))
