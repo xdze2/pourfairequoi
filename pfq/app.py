@@ -24,7 +24,8 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, TargetModal, UpdateModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, SyncModal, TargetModal, UpdateModal
+from pfq.sync import commit_and_push, has_remote, has_uncommitted_changes, is_git_repo, pull
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -70,7 +71,8 @@ class PfqApp(App):
     }}
     """
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("q", "request_quit", "Quit"),
+        Binding("f5", "sync", "Sync", show=True),
         Binding("h", "go_home", "Home"),
         Binding("escape", "go_back", "Back"),
         Binding("e", "edit_node", "Edit"),
@@ -92,6 +94,10 @@ class PfqApp(App):
         self.history: List[Optional[str]] = []
         self._last_view: list[ViewRow] = []
 
+    @property
+    def _sync_enabled(self) -> bool:
+        return is_git_repo(self.vault_path) and has_remote(self.vault_path)
+
     def compose(self) -> ComposeResult:
         yield Static(
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
@@ -108,6 +114,16 @@ class PfqApp(App):
     def on_mount(self) -> None:
         self._show_home()
         self._update_note_panel()
+        if self._sync_enabled:
+            result = pull(self.vault_path)
+            if result.ok:
+                if "Pulled" in result.message:
+                    # Reload graph after pull
+                    self.graph = load_vault(self.vault_path)
+                    self._show_home()
+                    self.notify("Pulled latest changes")
+            else:
+                self.notify(f"Sync: {result.message}", severity="warning")
 
     def _table(self) -> DataTable:
         return self.query_one(DataTable)
@@ -542,6 +558,34 @@ class PfqApp(App):
         if result in ("soft", "hard"):
             self._delete_nodes(self.graph.deletion_set(node_id, result), cursor_row)
             return
+
+    # ── Sync ───────────────────────────────────────────────────────────────────
+
+    def action_request_quit(self) -> None:
+        if not self._sync_enabled:
+            self.exit()
+            return
+        has_changes = has_uncommitted_changes(self.vault_path)
+        self.push_screen(SyncModal(has_changes), self._on_sync_quit_done)
+
+    def _on_sync_quit_done(self, result: Optional[str]) -> None:
+        if result is None:
+            return  # cancelled
+        if result == "sync_quit":
+            sync_result = commit_and_push(self.vault_path)
+            if not sync_result.ok:
+                self.notify(f"Sync failed: {sync_result.message}", severity="warning")
+        self.exit()
+
+    def action_sync(self) -> None:
+        if not self._sync_enabled:
+            self.notify("No git remote configured for this vault", severity="warning")
+            return
+        result = commit_and_push(self.vault_path)
+        if result.ok:
+            self.notify(result.message)
+        else:
+            self.notify(f"Sync failed: {result.message}", severity="warning")
 
     def _delete_nodes(self, node_ids: set, cursor_row: int = 0) -> None:
         navigating_away = self.current_node_id in node_ids

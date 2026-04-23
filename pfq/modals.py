@@ -829,6 +829,115 @@ class UpdateModal(ModalScreen):
 
 
 
+# ── Sync ───────────────────────────────────────────────────────────────────────
+
+
+class SyncModal(ModalScreen):
+    """Quit confirmation with optional sync.
+
+    Dismisses with:
+      "sync_quit"  — run sync then quit
+      "quit"       — quit without sync
+      None         — cancel (stay in app)
+    """
+
+    CSS = """
+    SyncModal {
+        align: center middle;
+    }
+    SyncModal #dialog {
+        background: $background;
+        border-left: tall $primary;
+        border-right: tall $primary;
+        border-bottom: tall $primary;
+        padding: 0 0 1 0;
+        width: 52;
+        height: auto;
+    }
+    SyncModal #modal-title {
+        background: $primary;
+        color: $background;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
+        margin-bottom: 1;
+    }
+    SyncModal #dialog-body {
+        padding: 0 2;
+        height: auto;
+    }
+    .sync-opt {
+        border: round $surface-lighten-2;
+        padding: 0 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+    .sync-opt.--selected {
+        border: round $primary;
+        background: $surface-lighten-1;
+    }
+    .sync-opt-label {
+        text-style: bold;
+    }
+    .sync-opt-detail {
+        color: $text-muted;
+    }
+    SyncModal #hint {
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+    BINDINGS = [
+        Binding("up", "move_up", "Up", show=False),
+        Binding("down", "move_down", "Down", show=False),
+        Binding("enter", "confirm", "Confirm"),
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    _OPTIONS = [
+        ("sync_quit", "Sync and quit", "Commit, push, then exit"),
+        ("quit",      "Quit without sync", "Exit immediately"),
+    ]
+
+    def __init__(self, has_changes: bool):
+        super().__init__()
+        self._selected = 0
+        self.has_changes = has_changes
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Quit", id="modal-title")
+            with Vertical(id="dialog-body"):
+                status = "Uncommitted changes detected." if self.has_changes else "No local changes."
+                yield Static(status, id="sync-status")
+                for i, (_, label, detail) in enumerate(self._OPTIONS):
+                    with Vertical(classes="sync-opt", id=f"sopt-{i}"):
+                        yield Static(label, classes="sync-opt-label")
+                        yield Static(detail, classes="sync-opt-detail")
+                yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        for i in range(len(self._OPTIONS)):
+            self.query_one(f"#sopt-{i}").set_class(i == self._selected, "--selected")
+
+    def action_move_up(self) -> None:
+        self._selected = (self._selected - 1) % len(self._OPTIONS)
+        self._refresh()
+
+    def action_move_down(self) -> None:
+        self._selected = (self._selected + 1) % len(self._OPTIONS)
+        self._refresh()
+
+    def action_confirm(self) -> None:
+        self.dismiss(self._OPTIONS[self._selected][0])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Edit ───────────────────────────────────────────────────────────────────────
 
 
