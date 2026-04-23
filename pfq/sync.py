@@ -30,8 +30,11 @@ def _run(args: list[str], cwd: Path) -> tuple[int, str, str]:
 
 
 def is_git_repo(vault_path: Path) -> bool:
-    code, _, _ = _run(["git", "rev-parse", "--git-dir"], vault_path)
-    return code == 0
+    """True only if vault_path itself is the root of a git repo (not a subdirectory of one)."""
+    code, out, _ = _run(["git", "rev-parse", "--show-toplevel"], vault_path)
+    if code != 0:
+        return False
+    return Path(out) == vault_path.resolve()
 
 
 def has_remote(vault_path: Path) -> bool:

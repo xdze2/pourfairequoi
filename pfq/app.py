@@ -102,7 +102,7 @@ class PfqApp(App):
     def _header_text(self, sync_status: Optional[str] = None) -> str:
         base = f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/"
         if not is_git_repo(self.vault_path):
-            return base
+            return base + "  [dim]local only[/]"
         remote = get_remote_name(self.vault_path)
         if remote is None:
             git_part = "  [dim]↯ no remote[/]"
