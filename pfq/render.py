@@ -79,12 +79,25 @@ def _tree_prefix_segments(
 def _desc_cell(
     role: NodeRole, depth: int, node, bullet: str, *, index: int = 0, items: list = ()
 ) -> Text:
-    """Description cell: connector prefix (if any) + bullet + description text."""
+    """Description cell: connector prefix (if any) + bullet + description text.
+
+    Selected row gets a left-gutter '▶ '; all other rows are padded by 2 spaces
+    so tree connectors stay aligned.
+    """
     raw = node.description or ""
-    if role in ("selected", "home_root"):
-        return _rich(bullet + (" " if bullet else "") + raw, depth)
+    if role == "selected":
+        t = Text()
+        t.append("▶ ", style="bold")
+        t.append((bullet + " " if bullet else "") + raw, style="bold")
+        return t
+    if role == "home_root":
+        t = Text()
+        t.append("  ")
+        t.append(bullet + (" " if bullet else "") + raw, style="bold")
+        return t
 
     t = Text()
+    t.append("  ")
     for seg, lvl in _tree_prefix_segments(depth, index, list(items), reverse=(role == "parent"), bullet=bullet):
         t.append(seg, style="dim" if lvl >= 2 else "")
     desc_style = "bold" if depth == 0 else ("dim" if depth >= 2 else "")
@@ -100,14 +113,12 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text("root", style="dim"), Text(), Text(), Text(), Text(), key="__home__")
+            table.add_row(Text("  ─ root", style="dim"), Text(), Text(), Text(), key="__home__")
             continue
         node = row.node
-        margin = "▶" if row.role == "selected" else ("" if row.role == "home_root" else " ")
         when_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
         activity_text = Text(row.activity_label, style="dim italic") if row.activity_label else Text()
         table.add_row(
-            margin,
             _desc_cell(row.role, row.depth, node, row.bullet,
                        index=row.index, items=row.items),
             when_text,

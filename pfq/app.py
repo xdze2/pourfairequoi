@@ -58,7 +58,7 @@ class PfqApp(App):
         text-style: none;
     }}
     DataTable {{
-        margin: 1 1 1 3;
+        margin: 1 1 1 1;
     }}
     #app-header {{
         dock: top;
@@ -97,8 +97,7 @@ class PfqApp(App):
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
-        table.add_column("", key="margin", width=1)
-        table.add_column("description", key="desc", width=50)
+        table.add_column("description", key="desc", width=52)
         table.add_column("when", key="when", width=22)
         table.add_column("state", key="state", width=8)
         table.add_column("activity", key="activity", width=10)
