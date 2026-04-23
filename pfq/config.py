@@ -24,7 +24,7 @@ FIELDS: dict[str, dict] = {
     },
     "comment": {
         "label": "Comment",
-        "kind": "textarea",
+        "kind": "text",
         "attr": "comment",
     },
     "pulse": {

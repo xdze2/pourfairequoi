@@ -3,6 +3,7 @@
 No NodeGraph dependency: all graph-derived data (bullet, is_leaf, is_root,
 also_labels) is precomputed in view.py.
 """
+
 from __future__ import annotations
 
 from rich.text import Text
@@ -12,9 +13,9 @@ from pfq.config import INFERRED_STATE_STYLES, STATUS_GLYPHS
 from pfq.view import NodeRole, ViewRow
 
 PALETTE = {
-    "row_bg":  "#1c2d40",   # selected row  — reserved, not yet applied
-    "cell_bg": "#2e2600",   # cursor cell   — dark yellow
-    "cell_fg": "#f0ead0",   # cursor cell text — warm white
+    "row_bg": "#1c2d40",  # selected row  — reserved, not yet applied
+    "cell_bg": "#2e2600",  # cursor cell   — dark yellow
+    "cell_fg": "#f0ead0",  # cursor cell text — warm white
 }
 
 
@@ -97,7 +98,9 @@ def _desc_cell(
 
     t = Text()
     t.append("  ")
-    for seg, lvl in _tree_prefix_segments(depth, index, list(items), reverse=(role == "parent"), bullet=bullet):
+    for seg, lvl in _tree_prefix_segments(
+        depth, index, list(items), reverse=(role == "parent"), bullet=bullet
+    ):
         t.append(seg, style="dim" if lvl >= 2 else "")
     desc_style = "bold" if depth == 0 else ("dim" if depth >= 2 else "")
     t.append((" " if bullet else "") + raw, style=desc_style)
@@ -131,14 +134,25 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), key="__home__")
+            table.add_row(Text(), Text("  - roots", style="$foreground 30%"), Text(), Text(), key="__home__")
+            continue
+        if row.role == "axis_why":
+            table.add_row(Text(), Text("  ⬆ why", style="$foreground 30%"), Text(), Text(), key="__axis_why__")
+            continue
+        if row.role == "axis_how":
+            table.add_row(Text(), Text("  ⬇ how", style="$foreground 30%"), Text(), Text(), key="__axis_how__")
             continue
         node = row.node
         table.add_row(
             _pulse_rich(row),
-            _desc_cell(row.role, row.depth, node, row.bullet,
-                       index=row.index, items=row.items),
+            _desc_cell(
+                row.role, row.depth, node, row.bullet, index=row.index, items=row.items
+            ),
             _target_rich(row) if row.when_label else Text(),
+            Text(
+                (node.comment or "").splitlines()[0] if node.comment else "",
+                style="dim #808080",
+            ),
             key=node.node_id,
         )
 
@@ -154,15 +168,27 @@ def render_to_text(rows: list[ViewRow]) -> str:
         state_suffix = ("  (" + row.pulse_label + ")") if row.pulse_label else ""
         if row.role == "home_root":
             b = row.bullet
-            lines.append(b + (" " if b else "") + (node.description or "") + state_suffix)
+            lines.append(
+                b + (" " if b else "") + (node.description or "") + state_suffix
+            )
         elif row.role == "selected":
             b = row.bullet
-            lines.append("▶ " + (b + " " if b else "") + (node.description or "") + state_suffix)
+            lines.append(
+                "▶ " + (b + " " if b else "") + (node.description or "") + state_suffix
+            )
         else:  # "parent" or "child"
             segs = _tree_prefix_segments(
-                row.depth, row.index, row.items,
-                reverse=(row.role == "parent"), bullet=row.bullet,
+                row.depth,
+                row.index,
+                row.items,
+                reverse=(row.role == "parent"),
+                bullet=row.bullet,
             )
             prefix = "".join(s for s, _ in segs)
-            lines.append(prefix + (" " if row.bullet else "") + (node.description or "") + state_suffix)
+            lines.append(
+                prefix
+                + (" " if row.bullet else "")
+                + (node.description or "")
+                + state_suffix
+            )
     return "\n".join(lines)

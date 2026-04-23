@@ -15,7 +15,6 @@ from textual.widgets import DataTable, Footer, Static
 
 from pfq.companion import CompanionPanel
 from pfq.config import FIELDS
-from pfq.note_panel import NotePanel
 from pfq.disk_io import (
     DEFAULT_VAULT_PATH,
     create_node,
@@ -125,15 +124,14 @@ class PfqApp(App):
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("pulse", key="pulse", width=13)
         table.add_column("description", key="desc", width=36)
-        table.add_column("target", key="target", width=18)
+        table.add_column("when", key="target", width=18)
+        table.add_column("mood", key="comment", width=22)
         yield table
-        yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
         yield Footer()
 
     def on_mount(self) -> None:
         self._show_home()
-        self._update_note_panel()
         self._update_header()
         if not self.graph.nodes:
             self.push_screen(HelpModal())
@@ -186,33 +184,31 @@ class PfqApp(App):
         self.history.append(self.current_node_id)
         self._show_node(node_id)
 
-    def _note_panel(self) -> NotePanel:
-        return self.query_one("#note-panel", NotePanel)
 
-    def _update_note_panel(self) -> None:
+    _NON_NODE_KEYS = {"__home__", "__axis_why__", "__axis_how__"}
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        row_key = str(event.row_key.value)
+        if row_key not in self._NON_NODE_KEYS:
+            return
         t = self._table()
-        try:
-            cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
-            row_key = str(cell_key.row_key.value)
-        except Exception:
-            self._note_panel().load_node(None, None)
-            return
-        if row_key == "__home__" or row_key not in self.graph.nodes:
-            self._note_panel().load_node(None, None)
-            return
-        node = self.graph.get_node(row_key)
-        self._note_panel().load_node(node.node_id, node.comment)
-
-    def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
-        self._update_note_panel()
+        row = event.cursor_row
+        n = t.row_count
+        # skip toward the middle: sentinel is row 0 → go down; axis rows are at the end → go up
+        if row == 0:
+            t.move_cursor(row=1)
+        elif row >= n - 1:
+            t.move_cursor(row=n - 2)
+        else:
+            t.move_cursor(row=row - 1)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if not self._table().has_focus:
             return
         row_key = str(event.cell_key.row_key.value)
-        if row_key == "__home__":
+        if row_key in ("__home__", "__axis_why__"):
             self.action_go_home()
-        elif row_key != self.current_node_id:
+        elif row_key in self.graph.nodes and row_key != self.current_node_id:
             self._navigate_to(row_key)
 
     def action_go_home(self) -> None:
@@ -261,7 +257,6 @@ class PfqApp(App):
             self._show_home(cursor_row=cursor_row)
         else:
             self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
-        self._update_note_panel()
         t.focus()
 
     def _on_target_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:

@@ -1040,7 +1040,7 @@ class EditModal(ModalScreen):
 
     CSS = _MODAL_BASE_CSS.format(cls="EditModal") + """
     EditModal #dialog {
-        width: 52;
+        width: 72;
     }
     EditModal TextArea {
         height: 8;
