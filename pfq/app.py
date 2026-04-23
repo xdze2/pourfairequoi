@@ -235,7 +235,7 @@ class PfqApp(App):
         node = self.graph.get_node(row_key)
         if result["action"] == "close":
             node.closed_at = date.today().isoformat()
-            node.close_reason = "done"
+            node.close_reason = result.get("reason", "done")
         else:
             node.closed_at = None
             node.close_reason = None

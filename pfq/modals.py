@@ -648,37 +648,76 @@ class WhenModal(ModalScreen):
 class StateModal(ModalScreen):
     """Toggle open/closed state for a node.
 
-    Dismisses with {"action": "close"} or {"action": "reopen"}, or None on cancel.
+    When closing, offers a done/discarded choice navigated with ←→ or Tab.
+    Dismisses with {"action": "close", "reason": "done"|"discarded"} or
+    {"action": "reopen"}, or None on cancel.
     """
 
     CSS = _MODAL_BASE_CSS.format(cls="StateModal") + """
     StateModal #dialog { width: 52; }
     StateModal #current { color: $text-muted; margin-bottom: 1; }
+    StateModal #reason-row { height: 1; margin-bottom: 1; }
+    StateModal .reason-btn {
+        width: 1fr;
+        padding: 0 1;
+        background: $surface;
+        color: $text-disabled;
+        border: none;
+        text-align: center;
+    }
+    StateModal .reason-btn.--active {
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
+    }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node):
         super().__init__()
         self.node = node
+        self._reason = "done"  # default close reason
 
     def compose(self) -> ComposeResult:
         label = (self.node.description or self.node.node_id)[:40]
         if self.node.is_closed:
             action_hint = "Enter  reopen   Esc  cancel"
             current = f"closed  ·  {self.node.close_reason or 'done'}"
+            with Vertical(id="dialog"):
+                yield Label(label, id="modal-title")
+                with Vertical(id="dialog-body"):
+                    yield Static(current, id="current")
+                    yield Static(f"[dim]{action_hint}[/]", id="hint", markup=True)
         else:
-            action_hint = "Enter  close   Esc  cancel"
-            current = "open"
-        with Vertical(id="dialog"):
-            yield Label(label, id="modal-title")
-            with Vertical(id="dialog-body"):
-                yield Static(current, id="current")
-                yield Static(f"[dim]{action_hint}[/]", id="hint", markup=True)
+            with Vertical(id="dialog"):
+                yield Label(label, id="modal-title")
+                with Vertical(id="dialog-body"):
+                    yield Static("close as:", id="current")
+                    with Horizontal(id="reason-row"):
+                        yield Static("done", id="btn-done", classes="reason-btn --active")
+                        yield Static("discarded", id="btn-discarded", classes="reason-btn")
+                    yield Static("[dim]←→  choose   Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        self._refresh_reason()
+
+    def _refresh_reason(self) -> None:
+        if self.node.is_closed:
+            return
+        self.query_one("#btn-done").set_class(self._reason == "done", "--active")
+        self.query_one("#btn-discarded").set_class(self._reason == "discarded", "--active")
 
     def on_key(self, event) -> None:
         if event.key == "enter":
             event.stop()
-            self.dismiss({"action": "reopen" if self.node.is_closed else "close"})
+            if self.node.is_closed:
+                self.dismiss({"action": "reopen"})
+            else:
+                self.dismiss({"action": "close", "reason": self._reason})
+        elif event.key in ("left", "right", "tab") and not self.node.is_closed:
+            event.stop()
+            self._reason = "discarded" if self._reason == "done" else "done"
+            self._refresh_reason()
 
     def action_cancel(self) -> None:
         self.dismiss(None)

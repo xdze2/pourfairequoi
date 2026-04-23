@@ -100,24 +100,26 @@ All computed at load time (topological order, leaves → roots). Never stored.
 | `_last_active` | `max(close_timestamp)` across all closed descendants; `null` if none |
 | `_is_overdue` | `now > estimated_closing_date`; `null` if no `estimated_closing_date` |
 | `_last_update` | start of current period window (see below); `null` if no `update_period` |
-| `_is_active` | `_last_active > _last_update`; `null` if no `update_period` |
+| `_is_active` | `_last_active >= _last_update`; `null` if no `update_period` or still in first period |
 
 ### `_last_update` — period window floor
 
-Stored, not continuously recomputed. Updated when activity happens (a descendant
-is closed), snapped to the period grid:
+Computed at load time (not stored), snapped to the period grid:
 
 ```
-on close event at time t:
-  _last_update = opened_at + (t - opened_at) // update_period * update_period
+elapsed = today - opened_at
+periods = elapsed // update_period
+_last_update = opened_at + periods * update_period
 ```
 
-Initial value: `opened_at` (start of first period). If `opened_at` is in the
-future, the first window hasn't started yet — `_is_active` stays `null` until
-that date passes, so future-dated nodes are naturally dormant.
+If `opened_at` is in the future, the node is dormant — `_is_active` stays `null`.
 
-`_last_update + update_period` is the deadline for the next expected activity.
-`_is_active` is true when something was closed within `[_last_update, now]`.
+**First period grace:** if `periods == 0` (today is still within the first
+`update_period` window), `_is_active` is `null` regardless of activity. No
+check-in is due yet, so "forgotten" would be a false alarm.
+
+`_last_update + update_period` is the next check-in deadline.
+`_is_active` is true when a descendant was closed at or after `_last_update`.
 
 ### `_last_active` propagation
 
@@ -154,11 +156,9 @@ Assembled in priority order, for open nodes only:
 ```
 state == closed                    → done / discarded  (from close_reason)
 _is_overdue                        → overdue
-_last_active == null               → untouched
-_is_active == false, > 4w          → forgotten
-_is_active == false                → slowing
 _is_active == true                 → active
-_is_active == null (no period set) → (no badge)
+_is_active == false                → forgotten
+_is_active == null                 → (no badge)  — no period set, or still in first period
 ```
 
 ---

@@ -244,7 +244,11 @@ def compute_lifecycle(graph: NodeGraph, today: date = None) -> None:
                 elapsed = (today - opened).days
                 periods = elapsed // node.update_period
                 node._last_update = opened + timedelta(days=periods * node.update_period)
-                node._is_active = (
-                    node._last_active is not None
-                    and node._last_active > node._last_update
-                )
+                if periods == 0:
+                    # still within the first period — no check-in due yet
+                    node._is_active = None
+                else:
+                    node._is_active = (
+                        node._last_active is not None
+                        and node._last_active >= node._last_update
+                    )

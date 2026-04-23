@@ -266,6 +266,28 @@ def test_is_active_none_for_closed_node(graph):
     assert graph.get_node("ZZ0001")._is_active is None
 
 
+# ── first-period grace ────────────────────────────────────────────────────────
+
+
+def test_first_period_grace_no_activity():
+    # opened today, period=1 → still in first period → _is_active should be None, not False
+    g = NodeGraph()
+    g.add_node(Node(node_id="XX0002", opened_at=TODAY.isoformat(), update_period=1))
+    compute_lifecycle(g, today=TODAY)
+    node = g.get_node("XX0002")
+    assert node._last_update == TODAY
+    assert node._is_active is None
+
+
+def test_first_period_grace_expires_next_day():
+    # one day later (periods=1) → no activity → _is_active should be False
+    g = NodeGraph()
+    tomorrow = TODAY + timedelta(days=1)
+    g.add_node(Node(node_id="XX0003", opened_at=TODAY.isoformat(), update_period=1))
+    compute_lifecycle(g, today=tomorrow)
+    assert g.get_node("XX0003")._is_active is False
+
+
 # ── future opened_at ───────────────────────────────────────────────────────────
 
 

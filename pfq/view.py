@@ -47,7 +47,7 @@ def _state_label(node: Node) -> str:
     """Stored open/closed fact."""
     if node.is_closed:
         return node.close_reason or "done"
-    return "open"
+    return ""
 
 
 def _activity_label(node: Node) -> str:
