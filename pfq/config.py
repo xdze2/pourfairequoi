@@ -39,7 +39,7 @@ FIELDS: dict[str, dict] = {
     },
     "update": {
         "label": "Update",
-        "kind": "when",
+        "kind": "update",
         "attr": None,
     },
 }

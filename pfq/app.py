@@ -24,7 +24,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StateModal, WhenModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StateModal, UpdateModal, WhenModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -204,8 +204,10 @@ class PfqApp(App):
         saved_row = t.cursor_coordinate.row
         if FIELDS[col_key]["kind"] == "state":
             self.push_screen(StateModal(node), lambda r: self._on_state_done(r, row_key, saved_row))
-        elif FIELDS[col_key]["kind"] == "when":
+        elif col_key == "when":
             self.push_screen(WhenModal(node), lambda r: self._on_when_done(r, row_key, saved_row))
+        elif col_key == "update":
+            self.push_screen(UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row))
         else:
             self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, row_key, saved_row))
 
@@ -252,8 +254,23 @@ class PfqApp(App):
             t.focus()
             return
         node = self.graph.get_node(row_key)
-        node.opened_at = result["opened_at"]
         node.estimated_closing_date = result["estimated_closing_date"]
+        save_node_fields(node)
+        from pfq.model import compute_lifecycle
+        compute_lifecycle(self.graph)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+        t.focus()
+
+    def _on_update_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+        t = self._table()
+        if result is None:
+            t.focus()
+            return
+        node = self.graph.get_node(row_key)
+        node.opened_at = result["opened_at"]
         node.update_period = result["update_period"]
         save_node_fields(node)
         from pfq.model import compute_lifecycle

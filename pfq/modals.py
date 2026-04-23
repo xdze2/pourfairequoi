@@ -546,7 +546,7 @@ class NodePickerModal(ModalScreen):
         self.dismiss(None)
 
 
-# ── When ───────────────────────────────────────────────────────────────────────
+# ── Shared date modal helpers ──────────────────────────────────────────────────
 
 
 def _parse_date(text: str) -> Optional[str]:
@@ -557,20 +557,45 @@ def _parse_date(text: str) -> Optional[str]:
     return result.isoformat() if result else None
 
 
+_DATE_MODAL_CSS = """
+    {cls} #dialog {{ width: 52; }}
+    {cls} .field-label {{ color: $text-muted; margin-top: 1; }}
+    {cls} .parsed {{ color: $text-muted; margin-top: 0; height: 1; padding-left: 2; }}
+    {cls} .parsed.--ok {{ color: $success; }}
+    {cls} .parsed.--err {{ color: $error; }}
+    {cls} #hint {{ margin-top: 1; }}
+"""
+
+
+def _set_feedback(modal, widget_id: str, text: str, ok: bool) -> None:
+    w = modal.query_one(widget_id, Static)
+    w.update(text)
+    w.set_class(ok, "--ok")
+    w.set_class(not ok and bool(text), "--err")
+
+
+def _refresh_date_feedback(modal, input_id: str, feedback_id: str) -> None:
+    value = modal.query_one(input_id, Input).value.strip()
+    if not value:
+        _set_feedback(modal, feedback_id, "", True)
+        return
+    parsed = _parse_date(value)
+    if parsed:
+        _set_feedback(modal, feedback_id, f"→ {parsed}", True)
+    else:
+        _set_feedback(modal, feedback_id, "? unrecognised", False)
+
+
+# ── When (target close date) ───────────────────────────────────────────────────
+
+
 class WhenModal(ModalScreen):
-    """Edit opened_at, estimated_closing_date, update_period with live parse feedback.
+    """Edit estimated_closing_date only.
 
-    Dismisses with a dict of changed fields, or None on cancel.
+    Dismisses with {"estimated_closing_date": str|None}, or None on cancel.
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="WhenModal") + """
-    WhenModal #dialog { width: 58; }
-    WhenModal .field-label { color: $text-muted; margin-top: 1; }
-    WhenModal .parsed { color: $text-muted; margin-top: 0; height: 1; padding-left: 2; }
-    WhenModal .parsed.--ok { color: $success; }
-    WhenModal .parsed.--err { color: $error; }
-    WhenModal #hint { margin-top: 1; }
-    """
+    CSS = _MODAL_BASE_CSS.format(cls="WhenModal") + _DATE_MODAL_CSS.format(cls="WhenModal")
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node):
@@ -581,66 +606,85 @@ class WhenModal(ModalScreen):
         with Vertical(id="dialog"):
             yield Label(f"When  {(self.node.description or '')[:36]}", id="modal-title")
             with Vertical(id="dialog-body"):
+                yield Label("target close", classes="field-label")
+                yield Input(value=self.node.estimated_closing_date or "",
+                            placeholder="e.g. jun. / in 3 months / thu 30", id="inp-close")
+                yield Static("", id="fb-close", classes="parsed")
+                yield Static("[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
+
+    def on_mount(self) -> None:
+        self.query_one("#inp-close", Input).focus()
+        _refresh_date_feedback(self, "#inp-close", "#fb-close")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        _refresh_date_feedback(self, "#inp-close", "#fb-close")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_confirm()
+
+    def action_confirm(self) -> None:
+        close = self.query_one("#inp-close", Input).value.strip()
+        self.dismiss({"estimated_closing_date": _parse_date(close) if close else None})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── Update (opened_at + period) ────────────────────────────────────────────────
+
+
+class UpdateModal(ModalScreen):
+    """Edit opened_at and update_period.
+
+    Dismisses with {"opened_at": str|None, "update_period": int|None}, or None on cancel.
+    """
+
+    CSS = _MODAL_BASE_CSS.format(cls="UpdateModal") + _DATE_MODAL_CSS.format(cls="UpdateModal")
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, node: Node):
+        super().__init__()
+        self.node = node
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"Update  {(self.node.description or '')[:34]}", id="modal-title")
+            with Vertical(id="dialog-body"):
                 yield Label("opened", classes="field-label")
-                yield Input(value=self.node.opened_at or "", placeholder="e.g. 2026-01-01 / last monday", id="inp-opened")
+                yield Input(value=self.node.opened_at or "",
+                            placeholder="e.g. 2026-01-01 / last monday", id="inp-opened")
                 yield Static("", id="fb-opened", classes="parsed")
 
-                yield Label("target close", classes="field-label")
-                yield Input(value=self.node.estimated_closing_date or "", placeholder="e.g. june / in 3 months", id="inp-close")
-                yield Static("", id="fb-close", classes="parsed")
-
                 yield Label("check every (days)", classes="field-label")
-                yield Input(value=str(self.node.update_period) if self.node.update_period else "", placeholder="e.g. 7  (leave blank to disable)", id="inp-period")
+                yield Input(value=str(self.node.update_period) if self.node.update_period else "",
+                            placeholder="e.g. 7  (leave blank to disable)", id="inp-period")
                 yield Static("", id="fb-period", classes="parsed")
 
                 yield Static("[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
 
     def on_mount(self) -> None:
         self.query_one("#inp-opened", Input).focus()
-        self._refresh_all()
-
-    def _set_feedback(self, widget_id: str, text: str, ok: bool) -> None:
-        w = self.query_one(widget_id, Static)
-        w.update(text)
-        w.set_class(ok, "--ok")
-        w.set_class(not ok and bool(text), "--err")
-
-    def _refresh_feedback(self, input_id: str, feedback_id: str) -> None:
-        value = self.query_one(input_id, Input).value.strip()
-        if not value:
-            self._set_feedback(feedback_id, "", True)
-            return
-        parsed = _parse_date(value)
-        if parsed:
-            self._set_feedback(feedback_id, f"→ {parsed}", True)
-        else:
-            self._set_feedback(feedback_id, "? unrecognised", False)
+        _refresh_date_feedback(self, "#inp-opened", "#fb-opened")
+        self._refresh_period()
 
     def _refresh_period(self) -> None:
         value = self.query_one("#inp-period", Input).value.strip()
         if not value:
-            self._set_feedback("#fb-period", "", True)
+            _set_feedback(self, "#fb-period", "", True)
             return
         try:
             days = int(value)
-            self._set_feedback("#fb-period", f"→ every {days}d", True)
+            _set_feedback(self, "#fb-period", f"→ every {days}d", True)
         except ValueError:
-            self._set_feedback("#fb-period", "? must be a number", False)
-
-    def _refresh_all(self) -> None:
-        self._refresh_feedback("#inp-opened", "#fb-opened")
-        self._refresh_feedback("#inp-close", "#fb-close")
-        self._refresh_period()
+            _set_feedback(self, "#fb-period", "? must be a number", False)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "inp-opened":
-            self._refresh_feedback("#inp-opened", "#fb-opened")
-        elif event.input.id == "inp-close":
-            self._refresh_feedback("#inp-close", "#fb-close")
+            _refresh_date_feedback(self, "#inp-opened", "#fb-opened")
         elif event.input.id == "inp-period":
             self._refresh_period()
 
-    _FIELD_ORDER = ["inp-opened", "inp-close", "inp-period"]
+    _FIELD_ORDER = ["inp-opened", "inp-period"]
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         idx = self._FIELD_ORDER.index(event.input.id)
@@ -650,15 +694,9 @@ class WhenModal(ModalScreen):
             self.action_confirm()
 
     def action_confirm(self) -> None:
-        result = {}
-
         opened = self.query_one("#inp-opened", Input).value.strip()
-        result["opened_at"] = _parse_date(opened) if opened else None
-
-        close = self.query_one("#inp-close", Input).value.strip()
-        result["estimated_closing_date"] = _parse_date(close) if close else None
-
         period = self.query_one("#inp-period", Input).value.strip()
+        result = {"opened_at": _parse_date(opened) if opened else None}
         if period:
             try:
                 result["update_period"] = int(period)
@@ -666,7 +704,6 @@ class WhenModal(ModalScreen):
                 result["update_period"] = self.node.update_period
         else:
             result["update_period"] = None
-
         self.dismiss(result)
 
     def action_cancel(self) -> None:
