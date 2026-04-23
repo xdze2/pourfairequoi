@@ -606,6 +606,9 @@ class TargetModal(ModalScreen):
     CSS = _MODAL_BASE_CSS.format(cls="TargetModal") + _DATE_MODAL_CSS.format(cls="TargetModal") + """
     TargetModal #dialog { width: 52; }
     TargetModal #current { color: $text-muted; margin-bottom: 1; }
+    TargetModal #reopen-row { height: 1; margin-top: 1; }
+    TargetModal #reopen-box { width: 3; }
+    TargetModal #reopen-label { width: 1fr; }
     TargetModal #section-close {
         height: auto;
         margin-top: 1;
@@ -635,6 +638,7 @@ class TargetModal(ModalScreen):
         self.node = node
         self._reason = "done"
         self._close_mode = False
+        self._reopen = False
 
     def compose(self) -> ComposeResult:
         label = (self.node.description or self.node.node_id)[:36]
@@ -648,7 +652,10 @@ class TargetModal(ModalScreen):
                     yield Input(value=self.node.closed_at or "",
                                 placeholder="e.g. yesterday / 2026-04-20", id="inp-closed")
                     yield Static("", id="fb-closed", classes="parsed")
-                    yield Static("[dim]Enter save  r reopen  Esc cancel[/]", id="hint", markup=True)
+                    with Horizontal(id="reopen-row"):
+                        yield Static("[dim][ ][/]", id="reopen-box", markup=True)
+                        yield Static("[dim] reopen[/]", id="reopen-label", markup=True)
+                    yield Static("[dim]Enter save  Tab reopen  Esc cancel[/]", id="hint", markup=True)
                 else:
                     yield Label("target date", classes="field-label")
                     yield Input(value=self.node.estimated_closing_date or "",
@@ -715,15 +722,27 @@ class TargetModal(ModalScreen):
                 self.dismiss({"action": "update_target",
                               "estimated_closing_date": _parse_date(raw) if raw else None})
 
+    def _refresh_reopen(self) -> None:
+        if self._reopen:
+            self.query_one("#reopen-box", Static).update("[bold green][x][/]")
+            self.query_one("#reopen-label", Static).update("[bold] reopen[/]")
+        else:
+            self.query_one("#reopen-box", Static).update("[dim][ ][/]")
+            self.query_one("#reopen-label", Static).update("[dim] reopen[/]")
+
     def _handle_key_closed(self, event) -> None:
-        if event.key == "r":
+        if event.key == "tab":
             event.stop()
-            self.dismiss({"action": "reopen"})
+            self._reopen = not self._reopen
+            self._refresh_reopen()
         elif event.key == "enter":
             event.stop()
-            raw = self.query_one("#inp-closed", Input).value.strip()
-            self.dismiss({"action": "update_closed_at",
-                          "closed_at": _parse_date(raw) if raw else None})
+            if self._reopen:
+                self.dismiss({"action": "reopen"})
+            else:
+                raw = self.query_one("#inp-closed", Input).value.strip()
+                self.dismiss({"action": "update_closed_at",
+                              "closed_at": _parse_date(raw) if raw else None})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
