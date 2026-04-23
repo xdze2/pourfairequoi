@@ -14,7 +14,7 @@ from typing import Literal, Optional
 from pfq.dates import format_date
 from pfq.model import Node, NodeGraph
 
-NodeRole = Literal["parent", "selected", "child", "home_root", "sentinel", "axis_why", "axis_how"]
+NodeRole = Literal["parent", "selected", "child", "home_root", "sentinel"]
 
 
 def _parse_iso(s: str) -> Optional[date]:
@@ -190,9 +190,6 @@ def build_node_view(graph: NodeGraph, node_id: str, today: date = None) -> list[
             index=i, items=filtered,
             visible_parent_id=visible_parent_id,
         ))
-
-    rows.append(ViewRow(role="axis_why", depth=0))
-    rows.append(ViewRow(role="axis_how", depth=0))
 
     return rows
 

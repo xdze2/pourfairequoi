@@ -60,6 +60,11 @@ class PfqApp(App):
     DataTable {{
         margin: 1 1 1 1;
     }}
+    #axis-label {{
+        color: $foreground 30%;
+        margin: 0 1 1 1;
+        height: 1;
+    }}
     #app-header {{
         dock: top;
         height: 1;
@@ -123,10 +128,11 @@ class PfqApp(App):
         yield Static("", id="app-header")
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("pulse", key="pulse", width=13)
-        table.add_column("description", key="desc", width=36)
+        table.add_column("description", key="desc", width=43)
         table.add_column("when", key="target", width=18)
         table.add_column("mood", key="comment", width=22)
         yield table
+        yield Static("  ⬆ why  ·  ⬇ how", id="axis-label")
         yield CompanionPanel(id="companion")
         yield Footer()
 
@@ -185,7 +191,7 @@ class PfqApp(App):
         self._show_node(node_id)
 
 
-    _NON_NODE_KEYS = {"__home__", "__axis_why__", "__axis_how__"}
+    _NON_NODE_KEYS = {"__home__"}
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         row_key = str(event.row_key.value)
@@ -193,20 +199,15 @@ class PfqApp(App):
             return
         t = self._table()
         row = event.cursor_row
-        n = t.row_count
-        # skip toward the middle: sentinel is row 0 → go down; axis rows are at the end → go up
+        # skip sentinel (row 0) → go down
         if row == 0:
             t.move_cursor(row=1)
-        elif row >= n - 1:
-            t.move_cursor(row=n - 2)
-        else:
-            t.move_cursor(row=row - 1)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if not self._table().has_focus:
             return
         row_key = str(event.cell_key.row_key.value)
-        if row_key in ("__home__", "__axis_why__"):
+        if row_key == "__home__":
             self.action_go_home()
         elif row_key in self.graph.nodes and row_key != self.current_node_id:
             self._navigate_to(row_key)

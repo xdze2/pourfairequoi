@@ -136,12 +136,6 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
         if row.role == "sentinel":
             table.add_row(Text(), Text("  - roots", style="$foreground 30%"), Text(), Text(), key="__home__")
             continue
-        if row.role == "axis_why":
-            table.add_row(Text(), Text("  ⬆ why", style="$foreground 30%"), Text(), Text(), key="__axis_why__")
-            continue
-        if row.role == "axis_how":
-            table.add_row(Text(), Text("  ⬇ how", style="$foreground 30%"), Text(), Text(), key="__axis_how__")
-            continue
         node = row.node
         table.add_row(
             _pulse_rich(row),
