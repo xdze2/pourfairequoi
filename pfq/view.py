@@ -65,17 +65,10 @@ def _when_label(node: Node, today: date) -> str:
     return "  ".join(parts)
 
 
-def _state_label(node: Node) -> str:
-    """Stored open/closed fact."""
+def _status_label(node: Node) -> str:
+    """Single merged status: closed fact takes priority, then computed activity."""
     if node.is_closed:
         return node.close_reason or "done"
-    return ""
-
-
-def _activity_label(node: Node) -> str:
-    """Computed activity observation — read-only."""
-    if node.is_closed:
-        return ""
     if node._is_overdue:
         return "overdue"
     if node._is_active is True:
@@ -98,9 +91,8 @@ class ViewRow:
     items: list = field(default_factory=list)   # [(Node, int)] peer group
     visible_parent_id: Optional[str] = None
     also_labels: list[str] = field(default_factory=list)  # other-parent descriptions
-    when_label: str = ""      # formatted next-check + target-close dates
-    state_label: str = ""     # stored open/closed fact
-    activity_label: str = ""  # computed activity observation (read-only)
+    when_label: str = ""    # formatted next-check + target-close dates
+    status_label: str = ""  # merged: closed reason or computed activity
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -139,8 +131,7 @@ def _make_row(
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
         when_label=_when_label(node, today),
-        state_label=_state_label(node),
-        activity_label=_activity_label(node),
+        status_label=_status_label(node),
     )
 
 

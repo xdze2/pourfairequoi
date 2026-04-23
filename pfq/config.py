@@ -7,6 +7,14 @@ INFERRED_STATE_STYLES: dict[str, str] = {
     "active":    "#7ab8d4",  # dusty blue
 }
 
+STATUS_GLYPHS: dict[str, str] = {
+    "active":    "▸",
+    "forgotten": "·",
+    "overdue":   "!",
+    "done":      "✓",
+    "discarded": "✗",
+}
+
 # Keyed by DataTable column key.
 FIELDS: dict[str, dict] = {
     "desc": {
@@ -19,12 +27,11 @@ FIELDS: dict[str, dict] = {
         "kind": "textarea",
         "attr": "comment",
     },
-    "state": {
+    "status": {
         "label": "State",
         "kind": "state",
         "attr": None,   # handled by StateModal, not a single attr
     },
-    # "activity" is intentionally absent — computed, not editable
     "when": {
         "label": "When",
         "kind": "when",

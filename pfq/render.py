@@ -8,7 +8,7 @@ from __future__ import annotations
 from rich.text import Text
 from textual.widgets import DataTable
 
-from pfq.config import INFERRED_STATE_STYLES
+from pfq.config import INFERRED_STATE_STYLES, STATUS_GLYPHS
 from pfq.view import NodeRole, ViewRow
 
 PALETTE = {
@@ -32,9 +32,10 @@ def _rich(text: str, depth: int) -> Text:
 
 
 def _state_rich(state: str, depth: int) -> Text:
-    """State cell: colored text based on inferred state name."""
+    """State cell: glyph + color, no text label."""
     if not state:
         return Text()
+    glyph = STATUS_GLYPHS.get(state, "?")
     color = INFERRED_STATE_STYLES.get(state)
     if depth == 0:
         style = f"bold {color}" if color else "bold"
@@ -42,7 +43,7 @@ def _state_rich(state: str, depth: int) -> Text:
         style = f"dim {color}" if color else "dim"
     else:
         style = color or ""
-    return Text(state, style=style)
+    return Text(f"{glyph} {state}", style=style)
 
 
 def _tree_prefix_segments(
@@ -113,17 +114,15 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text("  ─ root", style="dim"), Text(), Text(), Text(), key="__home__")
+            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), key="__home__")
             continue
         node = row.node
         when_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
-        activity_text = Text(row.activity_label, style="dim italic") if row.activity_label else Text()
         table.add_row(
+            _state_rich(row.status_label, row.depth),
             _desc_cell(row.role, row.depth, node, row.bullet,
                        index=row.index, items=row.items),
             when_text,
-            _state_rich(row.state_label, row.depth),
-            activity_text,
             key=node.node_id,
         )
 
@@ -136,7 +135,7 @@ def render_to_text(rows: list[ViewRow]) -> str:
             lines.append("─ root")
             continue
         node = row.node
-        state_suffix = ("  (" + row.state_label + ")") if row.state_label else ""
+        state_suffix = ("  (" + row.status_label + ")") if row.status_label else ""
         if row.role == "home_root":
             b = row.bullet
             lines.append(b + (" " if b else "") + (node.description or "") + state_suffix)

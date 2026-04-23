@@ -97,10 +97,9 @@ class PfqApp(App):
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
+        table.add_column("status", key="status", width=12)
         table.add_column("description", key="desc", width=52)
         table.add_column("when", key="when", width=22)
-        table.add_column("state", key="state", width=8)
-        table.add_column("activity", key="activity", width=10)
         yield table
         yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
