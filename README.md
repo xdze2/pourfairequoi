@@ -48,7 +48,7 @@ Optional tracking fields:
 |-------|---------|
 | `_last_active` | Most recent `closed_at` among all descendants (propagated bottom-up) |
 | `_last_update` | Last period boundary: `opened_at + (elapsed // period) * period` |
-| `_is_active` | `_last_active > _last_update` |
+| `_is_active` | `_last_active >= _last_update`; `None` if still in first period |
 | `_is_overdue` | `today > estimated_closing_date` |
 
 A "scheduled" node is simply open with a future `opened_at` — no special type needed.
@@ -78,11 +78,13 @@ One YAML file per node. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-
 
 | Column | Content | Editable |
 |--------|---------|----------|
+| status | `▸ active` / `· forgotten` / `! overdue` / `✓ done` / `✗ discarded` | `e` |
 | description | tree + node title | `e` |
-| also | other parents (multi-parent nodes) | — |
-| when | `↻ next-check  → target-close` | `e` |
-| state | `open` / `closed` | `e` |
-| activity | `active` / `forgotten` / `overdue` | read-only |
+| when | target close date — `→` weeks `⇒` months `☽` years `☀` | `e` |
+| update | `↻ next check-in` date | `e` |
+
+`e` on `status` toggles open/closed (with `done`/`discarded` choice on close).
+`e` on `when` edits `estimated_closing_date`. `e` on `update` edits `opened_at` + check period.
 
 ### Views
 
@@ -91,7 +93,7 @@ One YAML file per node. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-
 **Node view** — local neighbourhood of the selected node, depth 2 in each direction:
 
 ```
-─ root
+  ─ root
   ╭── grandparent
   ├── parent
 ▶ Current node
@@ -110,14 +112,14 @@ One YAML file per node. Filename: `{node_id}_{slug}.yaml`. The `node_id` is a 6-
 | `q` | Quit |
 | `Enter` | Open node |
 | `e` | Edit focused cell |
-| `a` | Add child node |
+| `a` | Add child node (Tab to toggle close-immediately) |
 | `z` | Link to parent (search or create) |
 | `d` | Delete / unlink (multi-choice modal) |
 | `Shift+↑` / `Shift+↓` | Reorder children |
 | `s` | Search / jump to node |
 | `y` | Copy view to clipboard |
 
-### Date input (when editing `when`)
+### Date input
 
 The date parser accepts:
 
@@ -146,7 +148,7 @@ Three-layer separation: **model → view → render**.
 |------|------|
 | `pfq/model.py` | `Node` dataclass, `NodeGraph`, `compute_lifecycle()` |
 | `pfq/disk_io.py` | File I/O: load/save vault, create/delete nodes |
-| `pfq/config.py` | `FIELDS`, `INFERRED_STATE_STYLES` |
+| `pfq/config.py` | `FIELDS`, `INFERRED_STATE_STYLES`, `STATUS_GLYPHS` |
 | `pfq/dates.py` | `format_date()`, `parse_date()` — logarithmic precision |
 | `pfq/view.py` | `ViewRow`, `build_node_view()`, `build_home_view()` |
 | `pfq/render.py` | `render_to_table()`, `render_to_text()` |
