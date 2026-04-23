@@ -99,7 +99,6 @@ class PfqApp(App):
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("", key="margin", width=1)
         table.add_column("description", key="desc", width=50)
-        table.add_column("also", key="also", width=24)
         table.add_column("when", key="when", width=22)
         table.add_column("state", key="state", width=8)
         table.add_column("activity", key="activity", width=10)
