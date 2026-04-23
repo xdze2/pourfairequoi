@@ -72,18 +72,18 @@ class PfqApp(App):
     """
     BINDINGS = [
         Binding("q", "request_quit", "Quit"),
-        Binding("f5", "sync", "Sync", show=True),
-        Binding("h", "go_home", "Home"),
-        Binding("escape", "go_back", "Back"),
-        Binding("e", "edit_node", "Edit"),
-        Binding("a", "append_node", "Append"),
-        Binding("z", "link_parent", "Link parent"),
-        Binding("d", "delete", "Delete"),
+        Binding("f5", "sync", "Sync"),
+        Binding("h", "go_home", "Home",         group=Binding.Group("navigate")),
+        Binding("escape", "go_back", "Back",    group=Binding.Group("navigate")),
+        Binding("s", "jump", "Search",          group=Binding.Group("navigate")),
+        Binding("e", "edit_node", "Edit",       group=Binding.Group("edit")),
+        Binding("a", "append_node", "Append",   group=Binding.Group("edit")),
+        Binding("z", "link_parent", "Link",     group=Binding.Group("edit")),
+        Binding("d", "delete", "Delete",        group=Binding.Group("edit")),
         Binding("shift+up", "reorder_up", "Move up", show=False),
         Binding("shift+down", "reorder_down", "Move down", show=False),
-        Binding("y", "yank_view", "Copy view"),
-        Binding("s", "jump", "Search", show=True),
-        Binding("f2", "toggle_companion", "AI", show=True),
+        Binding("y", "yank_view", "Copy",       group=Binding.Group("view")),
+        Binding("f2", "toggle_companion", "AI", group=Binding.Group("view")),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
