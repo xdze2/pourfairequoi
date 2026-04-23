@@ -24,7 +24,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, SyncModal, TargetModal, UpdateModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, HelpModal, NodePickerModal, SyncModal, TargetModal, UpdateModal
 from pfq.sync import commit_and_push, get_remote_name, has_remote, has_uncommitted_changes, is_git_repo, pull
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
@@ -84,6 +84,7 @@ class PfqApp(App):
         Binding("shift+down", "reorder_down", "Move down", show=False),
         Binding("y", "yank_view", "Copy",       group=Binding.Group("view")),
         Binding("f2", "toggle_companion", "AI", group=Binding.Group("view")),
+        Binding("f1", "toggle_help", "Help",    group=Binding.Group("view")),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -134,6 +135,8 @@ class PfqApp(App):
         self._show_home()
         self._update_note_panel()
         self._update_header()
+        if not self.graph.nodes:
+            self.push_screen(HelpModal())
         if self._sync_enabled:
             result = pull(self.vault_path)
             if result.ok:
@@ -458,6 +461,9 @@ class PfqApp(App):
             )
 
     # ── Companion ──────────────────────────────────────────────────────────────
+
+    def action_toggle_help(self) -> None:
+        self.push_screen(HelpModal())
 
     def action_toggle_companion(self) -> None:
         panel = self.query_one("#companion", CompanionPanel)

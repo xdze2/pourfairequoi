@@ -13,6 +13,100 @@ from textual.widgets import DataTable, Input, Label, Select, Static, TextArea
 from pfq.config import FIELDS
 from pfq.model import Node, NodeGraph
 
+# ── Help ───────────────────────────────────────────────────────────────────────
+
+_HELP_BINDINGS = [
+    ("navigate", [
+        ("Enter / click", "Open node"),
+        ("h",             "Home"),
+        ("Escape",        "Back"),
+        ("s",             "Search / jump"),
+    ]),
+    ("edit", [
+        ("a",             "Append child (or root)"),
+        ("e",             "Edit focused cell"),
+        ("z",             "Link to parent"),
+        ("d",             "Delete / unlink"),
+        ("Shift+↑ / ↓",  "Reorder sibling"),
+    ]),
+    ("view", [
+        ("y",             "Copy view to clipboard"),
+        ("f2",            "Toggle AI companion"),
+        ("F1",            "Toggle this help"),
+    ]),
+    ("app", [
+        ("f5",            "Sync vault (git push/pull)"),
+        ("q",             "Quit"),
+    ]),
+]
+
+
+class HelpModal(ModalScreen):
+    """Keyboard-shortcut reference. Dismiss with Escape, Enter, or F1."""
+
+    CSS = """
+    HelpModal {
+        align: center middle;
+    }
+    HelpModal #dialog {
+        background: $background;
+        border-left: tall $primary;
+        border-right: tall $primary;
+        border-bottom: tall $primary;
+        padding: 0 0 1 0;
+        width: 54;
+        height: auto;
+    }
+    HelpModal #modal-title {
+        background: $primary;
+        color: $background;
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
+        margin-bottom: 1;
+    }
+    HelpModal #dialog-body {
+        padding: 0 2;
+        height: auto;
+    }
+    HelpModal .section-header {
+        color: $text-muted;
+        margin-top: 1;
+        text-style: bold;
+    }
+    HelpModal .binding-row {
+        height: 1;
+    }
+    HelpModal .key-col {
+        width: 20;
+        color: $primary;
+    }
+    HelpModal .desc-col {
+        width: 1fr;
+    }
+    HelpModal #hint {
+        color: $text-muted;
+        margin-top: 1;
+    }
+    """
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("enter",  "dismiss", "Close"),
+        Binding("f1",     "dismiss", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Keyboard shortcuts", id="modal-title")
+            with Vertical(id="dialog-body"):
+                for section, pairs in _HELP_BINDINGS:
+                    yield Label(section, classes="section-header")
+                    for key, desc in pairs:
+                        with Horizontal(classes="binding-row"):
+                            yield Label(key,  classes="key-col")
+                            yield Label(desc, classes="desc-col")
+                yield Label("F1 to close", id="hint")
+
 # Shared CSS for the title-bar modal pattern
 _MODAL_BASE_CSS = """
     {cls} {{
