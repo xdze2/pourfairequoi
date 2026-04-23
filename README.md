@@ -4,7 +4,11 @@ Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
 
 It is a personal knowledge graph — a DAG of nodes where up-links mean generalization and down-links mean decomposition. Tasks are just leaf nodes. Goals are just roots.
 
+![Home view](screenshots/01_home.svg)
+
 See [philo.md](philo.md) for the full design thinking and [design_principles.md](design_principles.md) for the UI/UX principles that guide implementation decisions.
+
+More screenshots: [node view](screenshots/02_node.svg) · [companion](screenshots/03_companion.svg) · [edit modal](screenshots/04_edit_modal.svg) · [delete modal](screenshots/05_delete_modal.svg)
 
 ---
 
