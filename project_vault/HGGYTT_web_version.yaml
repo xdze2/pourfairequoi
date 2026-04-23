@@ -1,4 +1,6 @@
 description: Web version
+how:
+- target_node: 2RH06H_try_textual_web_need_a_server
 timeline:
 - date: 01/06/2026
   type: milestone

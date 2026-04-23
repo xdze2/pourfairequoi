@@ -1,2 +1,4 @@
 description: Add child node
+how:
+- target_node: 7QEKMW_debug_insert
 status: done
