@@ -94,6 +94,10 @@ def _pulse_label(node: Node, today: date) -> str:
     if node._is_active is True:
         next_check = node._last_update + timedelta(days=node.update_period)
         return f"  ↻ {format_date(next_check, today)}"
+    # _is_active is None but tracking is configured: first period, no alarm yet
+    if node._last_update is not None:
+        next_check = node._last_update + timedelta(days=node.update_period)
+        return f"  ↻ {format_date(next_check, today)}"
     return ""
 
 

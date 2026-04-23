@@ -586,45 +586,144 @@ def _refresh_date_feedback(modal, input_id: str, feedback_id: str) -> None:
         _set_feedback(modal, feedback_id, "? unrecognised", False)
 
 
-# ── When (target close date) ───────────────────────────────────────────────────
+# ── Target (target date + lifecycle) ──────────────────────────────────────────
 
 
-class WhenModal(ModalScreen):
-    """Edit estimated_closing_date only.
+class TargetModal(ModalScreen):
+    """Combined target date + lifecycle modal.
 
-    Dismisses with {"estimated_closing_date": str|None}, or None on cancel.
+    Open node:   edit estimated_closing_date or close (reason + optional date).
+    Closed node: edit closed_at (backdate) or reopen.
+
+    Dismisses with one of:
+      {"action": "update_target",  "estimated_closing_date": str|None}
+      {"action": "close",          "reason": str, "closed_at": str|None}
+      {"action": "update_closed_at","closed_at": str|None}
+      {"action": "reopen"}
+    Or None on cancel.
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="WhenModal") + _DATE_MODAL_CSS.format(cls="WhenModal")
+    CSS = _MODAL_BASE_CSS.format(cls="TargetModal") + _DATE_MODAL_CSS.format(cls="TargetModal") + """
+    TargetModal #dialog { width: 52; }
+    TargetModal #current { color: $text-muted; margin-bottom: 1; }
+    TargetModal #section-close {
+        height: auto;
+        margin-top: 1;
+        border-left: tall $surface;
+        padding-left: 1;
+    }
+    TargetModal #section-close.--active { border-left: tall $primary; }
+    TargetModal #reason-row { height: 1; }
+    TargetModal .reason-btn {
+        width: 1fr;
+        padding: 0 1;
+        background: $surface;
+        color: $text-disabled;
+        border: none;
+        text-align: center;
+    }
+    TargetModal .reason-btn.--active {
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
+    }
+    """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node):
         super().__init__()
         self.node = node
+        self._reason = "done"
+        self._close_mode = False
 
     def compose(self) -> ComposeResult:
+        label = (self.node.description or self.node.node_id)[:36]
         with Vertical(id="dialog"):
-            yield Label(f"When  {(self.node.description or '')[:36]}", id="modal-title")
+            yield Label(label, id="modal-title")
             with Vertical(id="dialog-body"):
-                yield Label("target close", classes="field-label")
-                yield Input(value=self.node.estimated_closing_date or "",
-                            placeholder="e.g. jun. / in 3 months / thu 30", id="inp-close")
-                yield Static("", id="fb-close", classes="parsed")
-                yield Static("[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
+                if self.node.is_closed:
+                    reason = self.node.close_reason or "done"
+                    yield Static(f"closed  ·  {reason}", id="current")
+                    yield Label("closed date", classes="field-label")
+                    yield Input(value=self.node.closed_at or "",
+                                placeholder="e.g. yesterday / 2026-04-20", id="inp-closed")
+                    yield Static("", id="fb-closed", classes="parsed")
+                    yield Static("[dim]Enter save  r reopen  Esc cancel[/]", id="hint", markup=True)
+                else:
+                    yield Label("target date", classes="field-label")
+                    yield Input(value=self.node.estimated_closing_date or "",
+                                placeholder="e.g. jun. / in 3 months / thu 30", id="inp-target")
+                    yield Static("", id="fb-target", classes="parsed")
+                    with Vertical(id="section-close"):
+                        yield Label("close as:", classes="field-label")
+                        with Horizontal(id="reason-row"):
+                            yield Static("done", id="btn-done", classes="reason-btn --active")
+                            yield Static("discarded", id="btn-discarded", classes="reason-btn")
+                        yield Label("close date  (blank = today)", classes="field-label")
+                        yield Input(placeholder="e.g. yesterday / 2d ago", id="inp-closed")
+                        yield Static("", id="fb-closed", classes="parsed")
+                    yield Static("[dim]Enter confirm  Tab close section  ←→ reason  Esc cancel[/]",
+                                 id="hint", markup=True)
 
     def on_mount(self) -> None:
-        self.query_one("#inp-close", Input).focus()
-        _refresh_date_feedback(self, "#inp-close", "#fb-close")
+        if self.node.is_closed:
+            self.query_one("#inp-closed", Input).focus()
+            _refresh_date_feedback(self, "#inp-closed", "#fb-closed")
+        else:
+            self.query_one("#inp-target", Input).focus()
+            _refresh_date_feedback(self, "#inp-target", "#fb-target")
+            self._refresh_reason()
+
+    def _refresh_reason(self) -> None:
+        self.query_one("#btn-done").set_class(self._reason == "done", "--active")
+        self.query_one("#btn-discarded").set_class(self._reason == "discarded", "--active")
+
+    def _refresh_close_section(self) -> None:
+        self.query_one("#section-close").set_class(self._close_mode, "--active")
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        _refresh_date_feedback(self, "#inp-close", "#fb-close")
+        if event.input.id == "inp-target":
+            _refresh_date_feedback(self, "#inp-target", "#fb-target")
+        elif event.input.id == "inp-closed":
+            _refresh_date_feedback(self, "#inp-closed", "#fb-closed")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.action_confirm()
+    def on_key(self, event) -> None:
+        if self.node.is_closed:
+            self._handle_key_closed(event)
+        else:
+            self._handle_key_open(event)
 
-    def action_confirm(self) -> None:
-        close = self.query_one("#inp-close", Input).value.strip()
-        self.dismiss({"estimated_closing_date": _parse_date(close) if close else None})
+    def _handle_key_open(self, event) -> None:
+        if event.key == "tab":
+            event.stop()
+            self._close_mode = not self._close_mode
+            self._refresh_close_section()
+            inp = "#inp-closed" if self._close_mode else "#inp-target"
+            self.query_one(inp, Input).focus()
+        elif event.key in ("left", "right") and self._close_mode:
+            event.stop()
+            self._reason = "discarded" if self._reason == "done" else "done"
+            self._refresh_reason()
+        elif event.key == "enter":
+            event.stop()
+            if self._close_mode:
+                raw = self.query_one("#inp-closed", Input).value.strip()
+                self.dismiss({"action": "close", "reason": self._reason,
+                              "closed_at": _parse_date(raw) if raw else None})
+            else:
+                raw = self.query_one("#inp-target", Input).value.strip()
+                self.dismiss({"action": "update_target",
+                              "estimated_closing_date": _parse_date(raw) if raw else None})
+
+    def _handle_key_closed(self, event) -> None:
+        if event.key == "r":
+            event.stop()
+            self.dismiss({"action": "reopen"})
+        elif event.key == "enter":
+            event.stop()
+            raw = self.query_one("#inp-closed", Input).value.strip()
+            self.dismiss({"action": "update_closed_at",
+                          "closed_at": _parse_date(raw) if raw else None})
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -709,86 +808,6 @@ class UpdateModal(ModalScreen):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-
-# ── State ──────────────────────────────────────────────────────────────────────
-
-
-class StateModal(ModalScreen):
-    """Toggle open/closed state for a node.
-
-    When closing, offers a done/discarded choice navigated with ←→ or Tab.
-    Dismisses with {"action": "close", "reason": "done"|"discarded"} or
-    {"action": "reopen"}, or None on cancel.
-    """
-
-    CSS = _MODAL_BASE_CSS.format(cls="StateModal") + """
-    StateModal #dialog { width: 52; }
-    StateModal #current { color: $text-muted; margin-bottom: 1; }
-    StateModal #reason-row { height: 1; margin-bottom: 1; }
-    StateModal .reason-btn {
-        width: 1fr;
-        padding: 0 1;
-        background: $surface;
-        color: $text-disabled;
-        border: none;
-        text-align: center;
-    }
-    StateModal .reason-btn.--active {
-        background: $surface-lighten-1;
-        color: $text;
-        text-style: bold;
-    }
-    """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
-
-    def __init__(self, node: Node):
-        super().__init__()
-        self.node = node
-        self._reason = "done"  # default close reason
-
-    def compose(self) -> ComposeResult:
-        label = (self.node.description or self.node.node_id)[:40]
-        if self.node.is_closed:
-            action_hint = "Enter  reopen   Esc  cancel"
-            current = f"closed  ·  {self.node.close_reason or 'done'}"
-            with Vertical(id="dialog"):
-                yield Label(label, id="modal-title")
-                with Vertical(id="dialog-body"):
-                    yield Static(current, id="current")
-                    yield Static(f"[dim]{action_hint}[/]", id="hint", markup=True)
-        else:
-            with Vertical(id="dialog"):
-                yield Label(label, id="modal-title")
-                with Vertical(id="dialog-body"):
-                    yield Static("close as:", id="current")
-                    with Horizontal(id="reason-row"):
-                        yield Static("done", id="btn-done", classes="reason-btn --active")
-                        yield Static("discarded", id="btn-discarded", classes="reason-btn")
-                    yield Static("[dim]←→  choose   Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
-
-    def on_mount(self) -> None:
-        self._refresh_reason()
-
-    def _refresh_reason(self) -> None:
-        if self.node.is_closed:
-            return
-        self.query_one("#btn-done").set_class(self._reason == "done", "--active")
-        self.query_one("#btn-discarded").set_class(self._reason == "discarded", "--active")
-
-    def on_key(self, event) -> None:
-        if event.key == "enter":
-            event.stop()
-            if self.node.is_closed:
-                self.dismiss({"action": "reopen"})
-            else:
-                self.dismiss({"action": "close", "reason": self._reason})
-        elif event.key in ("left", "right", "tab") and not self.node.is_closed:
-            event.stop()
-            self._reason = "discarded" if self._reason == "done" else "done"
-            self._refresh_reason()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
 
 
 # ── Edit ───────────────────────────────────────────────────────────────────────

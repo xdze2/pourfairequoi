@@ -24,7 +24,7 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, StateModal, UpdateModal, WhenModal
+from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, TargetModal, UpdateModal
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -204,7 +204,7 @@ class PfqApp(App):
         if col_key == "pulse":
             self.push_screen(UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row))
         elif col_key == "target":
-            self.push_screen(WhenModal(node), lambda r: self._on_when_done(r, row_key, saved_row))
+            self.push_screen(TargetModal(node), lambda r: self._on_target_done(r, row_key, saved_row))
         else:
             self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, row_key, saved_row))
 
@@ -224,34 +224,24 @@ class PfqApp(App):
         self._update_note_panel()
         t.focus()
 
-    def _on_state_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+    def _on_target_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
         t = self._table()
         if result is None:
             t.focus()
             return
         node = self.graph.get_node(row_key)
-        if result["action"] == "close":
-            node.closed_at = date.today().isoformat()
+        action = result["action"]
+        if action == "update_target":
+            node.estimated_closing_date = result["estimated_closing_date"]
+        elif action == "close":
+            node.closed_at = result.get("closed_at") or date.today().isoformat()
             node.close_reason = result.get("reason", "done")
-        else:
+        elif action == "update_closed_at":
+            if result.get("closed_at"):
+                node.closed_at = result["closed_at"]
+        elif action == "reopen":
             node.closed_at = None
             node.close_reason = None
-        save_node_fields(node)
-        from pfq.model import compute_lifecycle
-        compute_lifecycle(self.graph)
-        if self.current_node_id is None:
-            self._show_home(cursor_row=cursor_row)
-        else:
-            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
-        t.focus()
-
-    def _on_when_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
-        t = self._table()
-        if result is None:
-            t.focus()
-            return
-        node = self.graph.get_node(row_key)
-        node.estimated_closing_date = result["estimated_closing_date"]
         save_node_fields(node)
         from pfq.model import compute_lifecycle
         compute_lifecycle(self.graph)
