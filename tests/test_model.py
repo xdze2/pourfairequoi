@@ -21,7 +21,7 @@ def graph():
 
 
 def test_load_all_nodes(graph):
-    assert len(graph.nodes) == 18
+    assert len(graph.nodes) == 33
 
 
 def test_node_fields(graph):
@@ -41,7 +41,7 @@ def test_closed_node_fields(graph):
 
 def test_node_children(graph):
     children = graph.get_children_ids("AA0001")
-    assert children == ["AB0002", "AB0003"]
+    assert children == ["AB0002", "AB0003", "GB0001"]
 
 
 def test_node_no_children(graph):
@@ -67,7 +67,7 @@ def test_why_root_has_no_parents(graph):
 
 
 def test_roots(graph):
-    assert set(graph.get_roots()) == {"AA0001", "BA0001", "CA0001", "DA0001", "EA0001"}
+    assert set(graph.get_roots()) == {"AA0001", "CA0001", "DA0001", "EA0001", "FA0001"}
 
 
 # ── get_parents_tree ───────────────────────────────────────────────────────────
@@ -109,8 +109,8 @@ def test_parents_tree_shared_node_both_parents_at_depth_1(graph):
 
 def test_childrens_tree_depths(graph):
     tree = graph.get_childrens_tree("AA0001")
-    assert ids_at_depth(tree, 1) == {"AB0002", "AB0003"}
-    assert ids_at_depth(tree, 2) == {"AC0003", "ZZ0001"}
+    assert ids_at_depth(tree, 1) == {"AB0002", "AB0003", "GB0001"}
+    assert ids_at_depth(tree, 2) == {"AC0003", "ZZ0001", "GC0001"}
 
 
 def test_childrens_tree_excludes_current(graph):
@@ -124,7 +124,7 @@ def test_childrens_tree_leaf_is_empty(graph):
 
 def test_childrens_tree_max_depth_1(graph):
     tree = graph.get_childrens_tree("AA0001", max_depth=1)
-    assert ids_at_depth(tree, 1) == {"AB0002", "AB0003"}
+    assert ids_at_depth(tree, 1) == {"AB0002", "AB0003", "GB0001"}
     assert ids_at_depth(tree, 2) == set()
 
 

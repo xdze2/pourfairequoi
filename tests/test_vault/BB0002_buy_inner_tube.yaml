@@ -2,3 +2,4 @@ description: Buy inner tube
 opened_at: '2026-01-15'
 how:
 - target_node: ZZ0001_go_to_shop
+- target_node: ZZ0002_go_to_the_city

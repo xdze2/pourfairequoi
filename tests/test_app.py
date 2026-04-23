@@ -32,8 +32,8 @@ async def test_home_shows_root_nodes(app):
     async with app.run_test() as pilot:
         await pilot.pause()
         dt = app.query_one(DataTable)
-        # 5 roots + their depth-1 children (AA0001→2, BA0001→2, CA0001→0, DA0001→2, EA0001→3)
-        assert dt.row_count == 14
+        # 5 roots + their depth-1 children (AA0001→3, CA0001→0, DA0001→3, EA0001→3, FA0001→3)
+        assert dt.row_count == 17
 
 
 async def test_home_node_ids(app):
@@ -42,7 +42,7 @@ async def test_home_node_ids(app):
         dt = app.query_one(DataTable)
         row_keys = {str(key.value) for key in dt.rows}
         assert "AA0001" in row_keys
-        assert "BA0001" in row_keys
+        assert "FA0001" in row_keys
         assert "CA0001" in row_keys
 
 
@@ -103,14 +103,14 @@ async def test_node_view_shows_parents(app):
 
 
 async def test_node_view_item_count(app):
-    # AA0001: root line + 0 parents + current + 2 children (depth1) + 2 children (depth2)
-    # children tree: AB0002(1), AB0003(1), AC0003(2), ZZ0001(2) = 4
+    # AA0001: root line + 0 parents + current + 3 children (depth1) + 3 children (depth2)
+    # children tree: AB0002(1), AB0003(1), GB0001(1), AC0003(2), ZZ0001(2), GC0001(2) = 6
     async with app.run_test() as pilot:
         await pilot.pause()
         app._navigate_to("AA0001")
         await pilot.pause()
         dt = app.query_one(DataTable)
-        assert dt.row_count == 1 + 0 + 1 + 4  # root + parents + current + children
+        assert dt.row_count == 1 + 0 + 1 + 6  # root + parents + current + children
 
 
 async def test_current_node_focused(app):

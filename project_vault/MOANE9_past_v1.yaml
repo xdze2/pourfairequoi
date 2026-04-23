@@ -4,6 +4,7 @@ how:
 - target_node: SX51IR_horizontal_links_or_before_after
 - target_node: 1TXEQZ_git_integration
 - target_node: P4XFPB_event_first_data_mutable_graph
+- target_node: PZKJIS_check_graph_constitency
 status: someday
 timeline:
 - date: today
