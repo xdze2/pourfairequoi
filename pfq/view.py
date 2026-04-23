@@ -24,12 +24,8 @@ def _parse_iso(s: str) -> Optional[date]:
         return None
 
 
-def _when_label(node: Node, today: date) -> str:
-    """Build the 'when' cell.
-
-    Closed: "closed_at  (duration)"  e.g. "apr. 2025  (3w)"
-    Open:   "↻ next-check  → target-close"
-    """
+def _due_label(node: Node, today: date) -> str:
+    """'due' column: target close date for open nodes; closed_at + duration for closed."""
     if node.is_closed:
         closed = _parse_iso(node.closed_at)
         if closed is None:
@@ -51,18 +47,22 @@ def _when_label(node: Node, today: date) -> str:
             parts.append(f"({duration})")
         return "  ".join(parts)
 
-    parts = []
-    if node._last_update is not None:
-        from datetime import timedelta
-        next_check = node._last_update + timedelta(days=node.update_period)
-        parts.append("↻ " + format_date(next_check, today))
-
     if node.estimated_closing_date:
         d = _parse_iso(node.estimated_closing_date)
         if d is not None:
-            parts.append("→ " + format_date(d, today))
+            return "→ " + format_date(d, today)
+    return ""
 
-    return "  ".join(parts)
+
+def _update_label(node: Node, today: date) -> str:
+    """'update' column: next check-in date for open tracked nodes."""
+    if node.is_closed:
+        return ""
+    if node._last_update is not None:
+        from datetime import timedelta
+        next_check = node._last_update + timedelta(days=node.update_period)
+        return "↻ " + format_date(next_check, today)
+    return ""
 
 
 def _status_label(node: Node) -> str:
@@ -91,7 +91,8 @@ class ViewRow:
     items: list = field(default_factory=list)   # [(Node, int)] peer group
     visible_parent_id: Optional[str] = None
     also_labels: list[str] = field(default_factory=list)  # other-parent descriptions
-    when_label: str = ""    # formatted next-check + target-close dates
+    due_label: str = ""     # target close date (or closed_at + duration)
+    update_label: str = ""  # next check-in date
     status_label: str = ""  # merged: closed reason or computed activity
 
 
@@ -130,7 +131,8 @@ def _make_row(
         bullet=_bullet(is_root, is_leaf, depth),
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
-        when_label=_when_label(node, today),
+        due_label=_due_label(node, today),
+        update_label=_update_label(node, today),
         status_label=_status_label(node),
     )
 

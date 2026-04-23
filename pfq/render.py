@@ -114,15 +114,17 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), key="__home__")
+            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), Text(), key="__home__")
             continue
         node = row.node
-        when_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
+        due_text = Text(row.due_label, style="dim cyan") if row.due_label else Text()
+        update_text = Text(row.update_label, style="dim") if row.update_label else Text()
         table.add_row(
             _state_rich(row.status_label, row.depth),
             _desc_cell(row.role, row.depth, node, row.bullet,
                        index=row.index, items=row.items),
-            when_text,
+            due_text,
+            update_text,
             key=node.node_id,
         )
 
