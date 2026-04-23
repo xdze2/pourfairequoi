@@ -9,6 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -36,6 +37,14 @@ def is_git_repo(vault_path: Path) -> bool:
 def has_remote(vault_path: Path) -> bool:
     code, out, _ = _run(["git", "remote"], vault_path)
     return code == 0 and bool(out.strip())
+
+
+def get_remote_name(vault_path: Path) -> Optional[str]:
+    """Return the first remote name, or None."""
+    code, out, _ = _run(["git", "remote"], vault_path)
+    if code != 0 or not out.strip():
+        return None
+    return out.splitlines()[0].strip()
 
 
 def has_uncommitted_changes(vault_path: Path) -> bool:

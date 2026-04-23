@@ -25,7 +25,7 @@ from pfq.disk_io import (
     save_vault,
 )
 from pfq.modals import CreateModal, DeleteModal, EditModal, NodePickerModal, SyncModal, TargetModal, UpdateModal
-from pfq.sync import commit_and_push, has_remote, has_uncommitted_changes, is_git_repo, pull
+from pfq.sync import commit_and_push, get_remote_name, has_remote, has_uncommitted_changes, is_git_repo, pull
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -98,10 +98,29 @@ class PfqApp(App):
     def _sync_enabled(self) -> bool:
         return is_git_repo(self.vault_path) and has_remote(self.vault_path)
 
+    def _header_text(self, sync_status: Optional[str] = None) -> str:
+        base = f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/"
+        if not is_git_repo(self.vault_path):
+            return base
+        remote = get_remote_name(self.vault_path)
+        if remote is None:
+            git_part = "  [dim]↯ no remote[/]"
+        else:
+            dot = "  [yellow]●[/]" if has_uncommitted_changes(self.vault_path) else ""
+            git_part = f"  [dim]⟳ {remote}[/]{dot}"
+        if sync_status == "ok":
+            status_part = "  [green]✓[/]"
+        elif sync_status == "fail":
+            status_part = "  [red]![/]"
+        else:
+            status_part = ""
+        return base + git_part + status_part
+
+    def _update_header(self, sync_status: Optional[str] = None) -> None:
+        self.query_one("#app-header", Static).update(self._header_text(sync_status))
+
     def compose(self) -> ComposeResult:
-        yield Static(
-            f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
-        )
+        yield Static("", id="app-header")
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("pulse", key="pulse", width=13)
         table.add_column("description", key="desc", width=36)
@@ -114,16 +133,18 @@ class PfqApp(App):
     def on_mount(self) -> None:
         self._show_home()
         self._update_note_panel()
+        self._update_header()
         if self._sync_enabled:
             result = pull(self.vault_path)
             if result.ok:
                 if "Pulled" in result.message:
-                    # Reload graph after pull
                     self.graph = load_vault(self.vault_path)
                     self._show_home()
                     self.notify("Pulled latest changes")
+                self._update_header("ok")
             else:
                 self.notify(f"Sync: {result.message}", severity="warning")
+                self._update_header("fail")
 
     def _table(self) -> DataTable:
         return self.query_one(DataTable)
@@ -575,6 +596,8 @@ class PfqApp(App):
             sync_result = commit_and_push(self.vault_path)
             if not sync_result.ok:
                 self.notify(f"Sync failed: {sync_result.message}", severity="warning")
+                self._update_header("fail")
+                return  # stay in app so user sees the error
         self.exit()
 
     def action_sync(self) -> None:
@@ -584,8 +607,10 @@ class PfqApp(App):
         result = commit_and_push(self.vault_path)
         if result.ok:
             self.notify(result.message)
+            self._update_header("ok")
         else:
             self.notify(f"Sync failed: {result.message}", severity="warning")
+            self._update_header("fail")
 
     def _delete_nodes(self, node_ids: set, cursor_row: int = 0) -> None:
         navigating_away = self.current_node_id in node_ids
