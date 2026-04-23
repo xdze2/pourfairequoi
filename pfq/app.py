@@ -304,19 +304,25 @@ class PfqApp(App):
             lambda desc: self._on_create_child(desc, position, actual_parent_id),
         )
 
-    def _on_create_root(self, description: Optional[str]) -> None:
-        if not description:
+    def _on_create_root(self, result: Optional[dict]) -> None:
+        if not result:
             return
-        node = create_node(description, self.vault_path)
+        node = create_node(result["description"], self.vault_path)
         self.graph.add_node(node)
         self._show_home()
 
-    def _on_create_child(self, description: Optional[str], position: int, parent_id: str) -> None:
-        if not description:
+    def _on_create_child(self, result: Optional[dict], position: int, parent_id: str) -> None:
+        if not result:
             return
-        node = create_node(description, self.vault_path)
+        node = create_node(result["description"], self.vault_path)
         self.graph.add_node(node)
         self.graph.link_child(parent_id, node.node_id, position)
+        if result.get("close"):
+            node.closed_at = date.today().isoformat()
+            node.close_reason = "done"
+            save_node_fields(node)
+            from pfq.model import compute_lifecycle
+            compute_lifecycle(self.graph)
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 

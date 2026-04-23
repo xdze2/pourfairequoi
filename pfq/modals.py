@@ -55,24 +55,38 @@ _MODAL_BASE_CSS = """
 
 
 class CreateModal(ModalScreen):
-    """Prompt for a description, then dismiss with the string (or None on cancel)."""
+    """Prompt for a description + optional close-immediately toggle.
+
+    Dismisses with {"description": str, "close": bool}, or None on cancel.
+    Tab toggles the close checkbox; Enter confirms.
+    """
 
     CSS = _MODAL_BASE_CSS.format(cls="CreateModal") + """
-    CreateModal #dialog {
-        width: 52;
+    CreateModal #dialog { width: 52; }
+    CreateModal #close-row {
+        height: 1;
+        margin-top: 1;
     }
+    CreateModal #close-box { width: 3; }
+    CreateModal #close-label { width: 1fr; }
+    CreateModal #hint { margin-top: 1; }
     """
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, parent_label: str):
         super().__init__()
         self.parent_label = parent_label
+        self._close = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(f"Create  {self._short_label()}", id="modal-title")
             with Vertical(id="dialog-body"):
                 yield Input(placeholder="Description…", id="widget")
+                with Horizontal(id="close-row"):
+                    yield Static("[dim][ ][/]", id="close-box", markup=True)
+                    yield Static("[dim] close immediately[/]", id="close-label", markup=True)
+                yield Static("[dim]Tab  toggle   Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
 
     def _short_label(self) -> str:
         label = self.parent_label or ""
@@ -81,9 +95,26 @@ class CreateModal(ModalScreen):
     def on_mount(self) -> None:
         self.query_one("#widget").focus()
 
+    def _refresh_toggle(self) -> None:
+        if self._close:
+            self.query_one("#close-box", Static).update("[bold green][x][/]")
+            self.query_one("#close-label", Static).update("[bold] close immediately[/]")
+        else:
+            self.query_one("#close-box", Static).update("[dim][ ][/]")
+            self.query_one("#close-label", Static).update("[dim] close immediately[/]")
+
+    def on_key(self, event) -> None:
+        if event.key == "tab":
+            event.stop()
+            self._close = not self._close
+            self._refresh_toggle()
+
     def on_input_submitted(self, event: Input.Submitted) -> None:
         value = event.value.strip()
-        self.dismiss(value if value else None)
+        if value:
+            self.dismiss({"description": value, "close": self._close})
+        else:
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
