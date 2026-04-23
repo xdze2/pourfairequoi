@@ -32,8 +32,8 @@ async def test_home_shows_root_nodes(app):
     async with app.run_test() as pilot:
         await pilot.pause()
         dt = app.query_one(DataTable)
-        # 3 roots + their depth-1 children (AA0001→2, BA0001→2, CA0001→0)
-        assert dt.row_count == 7
+        # 5 roots + their depth-1 children (AA0001→2, BA0001→2, CA0001→0, DA0001→2, EA0001→3)
+        assert dt.row_count == 14
 
 
 async def test_home_node_ids(app):
