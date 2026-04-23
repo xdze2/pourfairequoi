@@ -24,8 +24,20 @@ def _parse_iso(s: str) -> Optional[date]:
         return None
 
 
+def _duration_label(days: int) -> str:
+    if days < 1:
+        return "today"
+    if days < 7:
+        return f"{days}d"
+    if days < 30:
+        return f"{days // 7}w"
+    if days < 365:
+        return f"{days // 30}mo"
+    return f"{days // 365}y"
+
+
 def _due_label(node: Node, today: date) -> str:
-    """'due' column: target close date for open nodes; closed_at + duration for closed."""
+    """target column: closed_at + duration (+ late suffix) for closed; estimated_closing_date for open."""
     if node.is_closed:
         closed = _parse_iso(node.closed_at)
         if closed is None:
@@ -45,6 +57,10 @@ def _due_label(node: Node, today: date) -> str:
             else:
                 duration = f"{days // 365}y"
             parts.append(f"({duration})")
+        if node.estimated_closing_date:
+            planned = _parse_iso(node.estimated_closing_date)
+            if planned is not None and closed > planned:
+                parts.append(f"· was {format_date(planned, today)}")
         return "  ".join(parts)
 
     if node.estimated_closing_date:
@@ -63,27 +79,21 @@ def _due_label(node: Node, today: date) -> str:
     return ""
 
 
-def _update_label(node: Node, today: date) -> str:
-    """'update' column: next check-in date for open tracked nodes."""
+def _pulse_label(node: Node, today: date) -> str:
+    """pulse column: !!! overdue / ! forgotten / ↻ active — empty otherwise."""
+    from datetime import timedelta
     if node.is_closed:
         return ""
-    if node._last_update is not None:
-        from datetime import timedelta
-        next_check = node._last_update + timedelta(days=node.update_period)
-        return "↻ " + format_date(next_check, today)
-    return ""
-
-
-def _status_label(node: Node) -> str:
-    """Single merged status: closed fact takes priority, then computed activity."""
-    if node.is_closed:
-        return node.close_reason or "done"
     if node._is_overdue:
-        return "overdue"
-    if node._is_active is True:
-        return "active"
+        d = _parse_iso(node.estimated_closing_date)
+        days = (today - d).days
+        return f"!!! {_duration_label(days)}"
     if node._is_active is False:
-        return "forgotten"
+        days = (today - node._last_update).days
+        return f"  ! {_duration_label(days)}"
+    if node._is_active is True:
+        next_check = node._last_update + timedelta(days=node.update_period)
+        return f"  ↻ {format_date(next_check, today)}"
     return ""
 
 
@@ -100,9 +110,8 @@ class ViewRow:
     items: list = field(default_factory=list)   # [(Node, int)] peer group
     visible_parent_id: Optional[str] = None
     also_labels: list[str] = field(default_factory=list)  # other-parent descriptions
-    when_label: str = ""    # target close date (or closed_at + duration)
-    update_label: str = ""  # next check-in date
-    status_label: str = ""  # merged: closed reason or computed activity
+    when_label: str = ""   # target close date (or closed_at + duration + late suffix)
+    pulse_label: str = ""  # !!! overdue / ! forgotten / ↻ active
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -141,8 +150,7 @@ def _make_row(
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
         when_label=_due_label(node, today),
-        update_label=_update_label(node, today),
-        status_label=_status_label(node),
+        pulse_label=_pulse_label(node, today),
     )
 
 

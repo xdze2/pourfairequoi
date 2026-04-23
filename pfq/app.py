@@ -97,10 +97,9 @@ class PfqApp(App):
             f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/", id="app-header"
         )
         table = DataTable(cursor_type="cell", show_header=True)
-        table.add_column("status", key="status", width=12)
+        table.add_column("pulse", key="pulse", width=13)
         table.add_column("description", key="desc", width=36)
-        table.add_column("when", key="when", width=16)
-        table.add_column("update", key="update", width=12)
+        table.add_column("target", key="target", width=18)
         yield table
         yield NotePanel(id="note-panel")
         yield CompanionPanel(id="companion")
@@ -202,12 +201,10 @@ class PfqApp(App):
             return
         node = self.graph.get_node(row_key)
         saved_row = t.cursor_coordinate.row
-        if FIELDS[col_key]["kind"] == "state":
-            self.push_screen(StateModal(node), lambda r: self._on_state_done(r, row_key, saved_row))
-        elif col_key == "when":
-            self.push_screen(WhenModal(node), lambda r: self._on_when_done(r, row_key, saved_row))
-        elif col_key == "update":
+        if col_key == "pulse":
             self.push_screen(UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row))
+        elif col_key == "target":
+            self.push_screen(WhenModal(node), lambda r: self._on_when_done(r, row_key, saved_row))
         else:
             self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, row_key, saved_row))
 

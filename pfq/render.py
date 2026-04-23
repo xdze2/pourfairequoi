@@ -31,19 +31,17 @@ def _rich(text: str, depth: int) -> Text:
     return t
 
 
-def _state_rich(state: str, depth: int) -> Text:
-    """State cell: glyph + color, no text label."""
-    if not state:
+def _pulse_rich(row: ViewRow) -> Text:
+    """Pulse cell: !!! overdue (red) / ! forgotten (muted red) / ↻ active (blue)."""
+    label = row.pulse_label
+    if not label:
         return Text()
-    glyph = STATUS_GLYPHS.get(state, "?")
-    color = INFERRED_STATE_STYLES.get(state)
-    if depth == 0:
-        style = f"bold {color}" if color else "bold"
-    elif depth == 2:
-        style = f"dim {color}" if color else "dim"
-    else:
-        style = color or ""
-    return Text(f"{glyph} {state}", style=style)
+    stripped = label.lstrip()
+    if stripped.startswith("!!!"):
+        return Text(label, style=INFERRED_STATE_STYLES["overdue"])
+    if stripped.startswith("!"):
+        return Text(label, style=INFERRED_STATE_STYLES["forgotten"])
+    return Text(label, style=INFERRED_STATE_STYLES["active"])
 
 
 def _tree_prefix_segments(
@@ -106,6 +104,25 @@ def _desc_cell(
     return t
 
 
+def _target_rich(row: ViewRow) -> Text:
+    """Target cell: closed nodes get ✓/✗ glyph + color, late suffix dimmed; open nodes dim cyan."""
+    if row.node and row.node.is_closed:
+        reason = row.node.close_reason or "done"
+        glyph = STATUS_GLYPHS.get(reason, "✓")
+        color = INFERRED_STATE_STYLES.get(reason, "")
+        label = row.when_label
+        t = Text()
+        t.append(glyph + " ", style=color)
+        if "· was" in label:
+            main, suffix = label.split("· was", 1)
+            t.append(main.rstrip(), style=color)
+            t.append("  · was" + suffix, style="dim")
+        else:
+            t.append(label, style=color)
+        return t
+    return Text(row.when_label, style="dim cyan")
+
+
 # ── Renderers ──────────────────────────────────────────────────────────────────
 
 
@@ -114,17 +131,14 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), Text(), key="__home__")
+            table.add_row(Text(), Text("  ─ root", style="dim"), Text(), key="__home__")
             continue
         node = row.node
-        due_text = Text(row.when_label, style="dim cyan") if row.when_label else Text()
-        update_text = Text(row.update_label, style="dim") if row.update_label else Text()
         table.add_row(
-            _state_rich(row.status_label, row.depth),
+            _pulse_rich(row),
             _desc_cell(row.role, row.depth, node, row.bullet,
                        index=row.index, items=row.items),
-            due_text,
-            update_text,
+            _target_rich(row) if row.when_label else Text(),
             key=node.node_id,
         )
 
@@ -137,7 +151,7 @@ def render_to_text(rows: list[ViewRow]) -> str:
             lines.append("─ root")
             continue
         node = row.node
-        state_suffix = ("  (" + row.status_label + ")") if row.status_label else ""
+        state_suffix = ("  (" + row.pulse_label + ")") if row.pulse_label else ""
         if row.role == "home_root":
             b = row.bullet
             lines.append(b + (" " if b else "") + (node.description or "") + state_suffix)
