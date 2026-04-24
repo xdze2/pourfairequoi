@@ -1,0 +1,5 @@
+close_reason: discarded
+closed_at: '2026-04-23'
+description: Go for events in node
+how:
+- target_node: 8T5TA5_allow_to_add_futur_event_deadline

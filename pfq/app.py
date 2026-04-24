@@ -1,2319 +1,776 @@
+"""PfqApp — Textual TUI entry point.
+
+Coordinates navigation, editing, and structural mutations.
+All rendering is delegated to render.py; all view-model building to view.py.
+"""
+
 from __future__ import annotations
 
-import math
-import re
-from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.reactive import reactive
-from textual.screen import ModalScreen
-from textual.widget import Widget
-from textual.widgets import (
-    ContentSwitcher,
-    Footer,
-    Input,
-    Label,
-    ListItem,
-    ListView,
-    Static,
+from textual.widgets import DataTable, Footer, Static
+
+from pfq.companion import CompanionPanel
+from pfq.config import FIELDS
+from pfq.disk_io import (
+    DEFAULT_VAULT_PATH,
+    create_node,
+    delete_node_file,
+    load_vault,
+    save_node_fields,
+    save_vault,
 )
-
-from .config import CONSTRAIN_TYPE_MAP, CONSTRAIN_TYPES, FIELDS, HORIZONS, STATUSES, TYPES
-from .model import (
-    Store,
-    find_path_by_id,
-    get_constrain,
-    get_how,
-    get_task_id,
-    load_task,
+from pfq.modals import (
+    CreateModal,
+    DeleteModal,
+    EditModal,
+    HelpModal,
+    NodePickerModal,
+    SyncModal,
+    TargetModal,
+    UpdateModal,
 )
-
-
-# ── Modals ────────────────────────────────────────────────────────────────────
-
-_MODAL_CSS = """\
-    {name} {{ align: center middle; }}
-    #modal-box {{
-        width: 50; height: auto; max-height: 20;
-        border: solid $primary; background: $surface; padding: 1 2;
-    }}
-    #modal-box > Label {{ margin-bottom: 1; }}
-"""
-
-
-class NewTaskModal(ModalScreen[Optional[str]]):
-    CSS = _MODAL_CSS.format(name="NewTaskModal")
-    BINDINGS = [Binding("escape", "dismiss", show=False)]
-
-    def __init__(self, default: str = "") -> None:
-        super().__init__()
-        self._default = default
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-box"):
-            yield Label("New task description:")
-            yield Input(
-                value=self._default, placeholder="description…", id="desc-input"
-            )
-
-    def on_mount(self) -> None:
-        inp = self.query_one("#desc-input", Input)
-        inp.cursor_position = len(self._default)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip() or None)
-
-
-class ConfirmModal(ModalScreen[bool]):
-    CSS = _MODAL_CSS.format(name="ConfirmModal")
-    BINDINGS = [
-        Binding("y", "yes", "Yes", show=True),
-        Binding("n", "no", "No", show=True),
-        Binding("escape", "no", show=False),
-    ]
-
-    def __init__(self, message: str) -> None:
-        super().__init__()
-        self._message = message
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-box"):
-            yield Label(self._message)
-            yield Label("[dim]y = confirm   n / Esc = cancel[/dim]")
-
-    def action_yes(self) -> None:
-        self.dismiss(True)
-
-    def action_no(self) -> None:
-        self.dismiss(False)
-
-
-# Fields that get a value picker instead of free-text editing
-_PICKER_FIELDS: dict[str, dict[str, tuple[str, str]]] = {
-    "type": TYPES,
-    "status": STATUSES,
-    "horizon": HORIZONS,
-}
-
-
-class ValuePickerModal(ModalScreen[Optional[str]]):
-    CSS = _MODAL_CSS.format(name="ValuePickerModal")
-    BINDINGS = [Binding("escape", "dismiss", show=False)]
-
-    def __init__(self, field: str, current: str = "") -> None:
-        super().__init__()
-        self._field = field
-        self._current = current
-        self._choices = _PICKER_FIELDS.get(field, {})
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-box"):
-            yield Label(f"Select {self._field}:")
-            with ListView():
-                for key, (label, style) in self._choices.items():
-                    marker = "► " if key == self._current else "  "
-                    t = Text(f"{marker}{label}", style=style)
-                    yield ListItem(Label(t), id=f"val-{key}")
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.dismiss(event.item.id.removeprefix("val-"))
-
-
-# ── Row model ─────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Row:
-    kind: str  # "simple" | "text" | "spacer"
-    # | "how_header" | "how_item" | "how_add"
-    # | "constrain_header" | "constrain_item" | "constrain_add"
-    # | "why_header" | "why_item"
-    field: str  # field name for simple/text; constrain type for constrain rows; "" otherwise
-    idx: int | None  # index into how or constrain list; None for headers/add
-    backlink_path: "Path | None" = None
-    backlink_desc: str = ""
-
-    @property
-    def editable(self) -> bool:
-        return self.kind in (
-            "simple",
-            "text",
-            "how_item",
-            "constrain_item",
-        )
-
-
-def build_rows(data: dict) -> list[Row]:
-    rows: list[Row] = []
-
-    # scalar / text fields — description always first
-    rows.append(Row("simple", "description", None))
-    for key, ftype in FIELDS.items():
-        if key == "description" or key not in data:
-            continue
-        rows.append(Row("text" if ftype == "text" else "simple", key, None))
-
-    # how section
-    how = get_how(data)
-    if how:
-        rows.append(Row("how_header", "", None))
-        for i, entry in enumerate(how):
-            rows.append(Row("how_item", "", i))
-        rows.append(Row("how_add", "", None))
-
-    # constrain section — grouped by type
-    constrain = get_constrain(data)
-    if constrain:
-        for ct in CONSTRAIN_TYPES:
-            type_entries = [
-                (i, e) for i, e in enumerate(constrain) if e.get("type") == ct.name
-            ]
-            if type_entries:
-                rows.append(Row("constrain_header", ct.name, None))
-                for i, _ in type_entries:
-                    rows.append(Row("constrain_item", ct.name, i))
-                rows.append(Row("constrain_add", ct.name, None))
-
-    return rows
-
-
-def build_backlink_rows(path: "Path", store: dict) -> list[Row]:
-    """Derive 'why' rows by scanning for nodes that declare path as a how child."""
-    current_id = get_task_id(path).upper()
-    parents: list[tuple[Path, str]] = []
-    for src_path, src_data in store.items():
-        if src_path == path:
-            continue
-        for entry in get_how(src_data):
-            if (entry.get("target_node") or "").upper() == current_id:
-                desc = str(src_data.get("description", "") or get_task_id(src_path))
-                parents.append((src_path, desc))
-                break
-
-    rows: list[Row] = [Row("why_header", "", None)]
-    for src_path, src_desc in parents:
-        rows.append(
-            Row("why_item", "", None, backlink_path=src_path, backlink_desc=src_desc)
-        )
-    rows.append(Row("why_add", "", None))
-    return rows
-
-
-def _resolve_entry_desc(entry: dict, store: dict) -> str:
-    """Return description for a how or constrain entry, falling back to target node's description."""
-    desc = str(entry.get("description", "") or "")
-    if desc:
-        return desc
-    target_id = str(entry.get("target_node", "") or "")
-    if target_id and store:
-        target_path = find_path_by_id(target_id, store)
-        if target_path:
-            return str(store[target_path].get("description", "") or "")
-    return ""
-
-
-def get_row_text(row: Row, data: dict, store: dict | None = None) -> str:
-    if row.kind in ("simple", "text"):
-        return str(data.get(row.field) or "")
-    _store = store or {}
-    if row.kind == "how_item" and row.idx is not None:
-        how = get_how(data)
-        if row.idx < len(how):
-            return _resolve_entry_desc(how[row.idx], _store)
-    if row.kind == "constrain_item" and row.idx is not None:
-        constrain = get_constrain(data)
-        if row.idx < len(constrain):
-            return _resolve_entry_desc(constrain[row.idx], _store)
-    return ""
-
-
-_DATE_FIELDS = {"start_date", "due_date"}
-
-_RELATIVE_RE = re.compile(
-    r"^(?P<n>\d+)\s*(?P<unit>[dwmy])\s*(?P<ago>ago)?$",
-    re.IGNORECASE,
+from pfq.sync import (
+    commit_and_push,
+    get_remote_name,
+    has_remote,
+    has_uncommitted_changes,
+    is_git_repo,
+    pull,
 )
-_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
-
-
-def _parse_date_input(value: str) -> str:
-    """Parse loose date input and return an ISO-8601 string, or the original value."""
-    v = value.strip()
-    if not v:
-        return v
-    # Already ISO
-    try:
-        date.fromisoformat(v)
-        return v
-    except ValueError:
-        pass
-    # Relative: e.g. "3d", "2w ago", "1m", "6m ago", "1y"
-    m = _RELATIVE_RE.match(v)
-    if m:
-        n = int(m.group("n"))
-        unit = m.group("unit").lower()
-        ago = bool(m.group("ago"))
-        delta = timedelta(days=n * _UNIT_DAYS[unit])
-        result = date.today() + (-delta if ago else delta)
-        return result.isoformat()
-    # Unrecognised — store as-is so the user sees their typo
-    return v
-
-
-def set_row_text(row: Row, data: dict, value: str) -> None:
-    if row.kind in ("simple", "text"):
-        if row.field in _DATE_FIELDS:
-            value = _parse_date_input(value)
-        data[row.field] = value
-    elif row.kind == "how_item" and row.idx is not None:
-        how = get_how(data)
-        if row.idx < len(how):
-            how[row.idx]["description"] = value
-    elif row.kind == "constrain_item" and row.idx is not None:
-        constrain = get_constrain(data)
-        if row.idx < len(constrain):
-            constrain[row.idx]["description"] = value
-
-
-_SPACER = Row("spacer", "", None)
-
-
-# ── Style maps ────────────────────────────────────────────────────────────────
-
-STATUS_STYLES: dict[str, str] = {k: v[1] for k, v in STATUSES.items()}
-TYPE_STYLES: dict[str, str] = {k: v[1] for k, v in TYPES.items()}
-
-# Fixed column widths for chip alignment (derived from config so they stay in sync)
-_TYPE_COL = max(len(k) for k in TYPES)  # "constraint" = 10
-_STATUS_COL = max(len(k) for k in STATUSES)  # "discarded"  = 9
-_DATE_COL = 10  # ISO-8601 date: yyyy-mm-dd
-
-
-def _pad(t: Text, text: str, width: int) -> None:
-    """Append trailing spaces to reach `width` characters (no-op if text is already wider)."""
-    gap = width - len(text)
-    if gap > 0:
-        t.append(" " * gap)
-
-
-def _append_chips(t: Text, data: dict) -> None:
-    """Append type / status / date in fixed-width columns for table alignment."""
-    task_type = str(data.get("type", "") or "")
-    status = str(data.get("status", "") or "")
-    date = str(data.get("due_date", "") or data.get("start_date", "") or "")
-
-    t.append("  ")
-    if task_type:
-        t.append(task_type.ljust(_TYPE_COL), style=TYPE_STYLES.get(task_type, "dim"))
-    else:
-        t.append(" " * _TYPE_COL)
-
-    t.append("  ")
-    if status:
-        t.append(status.ljust(_STATUS_COL), style=STATUS_STYLES.get(status, "dim"))
-    else:
-        t.append(" " * _STATUS_COL)
-
-    t.append("  ")
-    if date:
-        t.append(date, style="dim")
-    else:
-        t.append(" " * _DATE_COL)
-
-
-# ── Timeline helpers ──────────────────────────────────────────────────────────
-
-_TYPE_DEFAULT_HORIZON: dict[str, str] = {
-    "goal": "vision",
-    "project": "month",
-    "task": "week",
-    "event": "day",
-    "decision": "week",
-    "milestone": "day",
-    "constraint": "year",
-}
-
-_HORIZON_DAYS: dict[str, int] = {
-    "day": 1,
-    "week": 7,
-    "month": 30,
-    "year": 365,
-    "vision": 3 * 365,
-}
-
-_TL_MAX_DAYS = 3 * 365  # log scale spans ±3 years
-
-
-def _date_to_col(d: date, today: date, now_col: int, total_width: int) -> int:
-    """Map a date to a column index using log scale centred at now_col."""
-    delta = (d - today).days
-    if delta <= 0:
-        past = min(-delta, _TL_MAX_DAYS)
-        if past == 0:
-            return now_col
-        frac = math.log1p(past) / math.log1p(_TL_MAX_DAYS)
-        return max(0, round(now_col * (1 - frac)))
-    else:
-        future = min(delta, _TL_MAX_DAYS)
-        frac = math.log1p(future) / math.log1p(_TL_MAX_DAYS)
-        return min(total_width - 1, now_col + round((total_width - now_col) * frac))
-
-
-def _tl_data(data: dict, parent_start: str | None) -> tuple[str | None, str, str | None]:
-    """Return (tl_start, tl_horizon, tl_due) for a node, inheriting start from parent."""
-    raw_start = str(data.get("start_date", "") or "").strip()
-    tl_start = raw_start if raw_start else parent_start
-
-    node_type = str(data.get("type", "") or "").strip()
-    raw_horizon = str(data.get("horizon", "") or "").strip()
-    tl_horizon = raw_horizon if raw_horizon else _TYPE_DEFAULT_HORIZON.get(node_type, "week")
-
-    raw_due = str(data.get("due_date", "") or "").strip()
-    tl_due = raw_due if raw_due else None
-
-    return tl_start, tl_horizon, tl_due
-
-
-def _append_timeline(line: Text, entry: dict, width: int) -> None:
-    """Append a log-scale timeline bar to a Rich Text line."""
-    if width <= 4:
-        return
-
-    today = date.today()
-    now_col = width // 3  # NOW at 1/3 from left
-
-    tl_start = entry.get("tl_start")
-    tl_horizon = entry.get("tl_horizon", "week")
-    tl_due = entry.get("tl_due")
-    status = entry.get("status", "")
-
-    # Resolve start / end dates
-    start: date | None = None
-    if tl_start:
-        try:
-            start = date.fromisoformat(tl_start)
-        except ValueError:
-            pass
-
-    end: date | None = None
-    if tl_due:
-        try:
-            end = date.fromisoformat(tl_due)
-        except ValueError:
-            pass
-
-    duration = timedelta(days=_HORIZON_DAYS.get(tl_horizon, 7))
-    if start is None and end is not None:
-        start = end - duration
-    elif start is not None and end is None:
-        end = start + duration
-
-    # Build char + style arrays
-    chars = [" "] * width
-    styles: list[str | None] = [None] * width
-
-    # Draw fuzzy bar
-    if start is not None and end is not None:
-        sc = _date_to_col(start, today, now_col, width)
-        ec = _date_to_col(end, today, now_col, width)
-        bar_char = {"done": "░", "active": "█", "stuck": "╌"}.get(status, "▒")
-        bar_style = {
-            "done": "dim",
-            "active": "bold green",
-            "stuck": "dim red",
-        }.get(status, "dim cyan")
-        for c in range(min(sc, ec), max(sc, ec) + 1):
-            if 0 <= c < width:
-                chars[c] = bar_char
-                styles[c] = bar_style
-
-    # NOW marker — ┃ if bar passes through it, │ otherwise
-    if 0 <= now_col < width:
-        if chars[now_col] != " ":
-            chars[now_col] = "┃"
-            styles[now_col] = "bold cyan"
-        else:
-            chars[now_col] = "│"
-            styles[now_col] = "dim"
-
-    # Hard due-date marker (overlaid on top of bar)
-    if tl_due:
-        try:
-            due_obj = date.fromisoformat(tl_due)
-            dc = _date_to_col(due_obj, today, now_col, width)
-            label = due_obj.strftime("%d/%m")
-            if 0 <= dc < width:
-                chars[dc] = "×"
-                styles[dc] = "bold yellow"
-                for j, ch in enumerate(label):
-                    pos = dc + 1 + j
-                    if pos < width:
-                        chars[pos] = ch
-                        styles[pos] = "yellow"
-        except ValueError:
-            pass
-
-    # Render: group consecutive same-style chars into Rich Text spans
-    i = 0
-    while i < width:
-        st = styles[i]
-        j = i + 1
-        while j < width and styles[j] == st:
-            j += 1
-        line.append("".join(chars[i:j]), style=st)
-        i = j
-
-
-def _append_timeline_axis(line: Text, width: int) -> None:
-    """Append a timeline axis with date labels at log-scale tick positions."""
-    if width <= 4:
-        return
-
-    today = date.today()
-    now_col = width // 3
-
-    # (delta_days, label) — placed left-to-right; label goes right of tick
-    ticks = [
-        (-3 * 365, "◄"),
-        (-365,     "-1y"),
-        (-30,      "-1m"),
-        (0,        "now"),
-        (30,       "+1m"),
-        (365,      "+1y"),
-        (3 * 365,  "►"),
-    ]
-
-    chars = [" "] * width
-    styles: list[str | None] = [None] * width
-
-    # Place "now" marker
-    chars[now_col] = "┬"
-    styles[now_col] = "bold cyan"
-
-    # Place each tick label, skip if it would overlap already-written chars
-    for delta, label in ticks:
-        if delta == 0:
-            col = now_col
-        elif delta < 0:
-            past = min(-delta, _TL_MAX_DAYS)
-            frac = math.log1p(past) / math.log1p(_TL_MAX_DAYS)
-            col = max(0, round(now_col * (1 - frac)))
-        else:
-            future = min(delta, _TL_MAX_DAYS)
-            frac = math.log1p(future) / math.log1p(_TL_MAX_DAYS)
-            col = min(width - 1, now_col + round((width - now_col) * frac))
-
-        # "now" label goes right of the ┬; others: label then tick char
-        if delta == 0:
-            start = col + 1
-            for j, ch in enumerate(label):
-                pos = start + j
-                if pos < width and chars[pos] == " ":
-                    chars[pos] = ch
-                    styles[pos] = "bold cyan"
-        else:
-            # Try to fit label ending at col-1, then tick at col
-            llen = len(label)
-            start = col - llen
-            # Check for overlap
-            overlap = any(
-                0 <= start + j < width and chars[start + j] != " "
-                for j in range(llen)
-            )
-            if not overlap and start >= 0:
-                for j, ch in enumerate(label):
-                    chars[start + j] = ch
-                    styles[start + j] = "dim"
-                if 0 <= col < width and chars[col] == " ":
-                    chars[col] = "┬"
-                    styles[col] = "dim"
-
-    # Underline connecting all tick cols
-    for c in range(width):
-        if chars[c] == " ":
-            chars[c] = "─"
-            styles[c] = "dim"
-
-    i = 0
-    while i < width:
-        st = styles[i]
-        j = i + 1
-        while j < width and styles[j] == st:
-            j += 1
-        line.append("".join(chars[i:j]), style=st)
-        i = j
-
-
-class _AppHeader(Static):
-    DEFAULT_CSS = "_AppHeader { height: 3; }"
-
-
-class SubgraphPane(Widget, can_focus=True):
-    """Left panel in node state: ancestors → ► current → descendants."""
-
-    BINDINGS = [
-        Binding("up", "cursor_up", show=False),
-        Binding("down", "cursor_down", show=False),
-        Binding("enter", "select_node", "Select", show=True),
-        Binding("space", "preview_node", "Preview", show=False),
-        Binding("e", "edit_right", "Edit", show=True),
-        Binding("n", "new_task", "New", show=True),
-        Binding("d", "delete_task", "Delete", show=True),
-    ]
-
-    cursor: reactive[int] = reactive(0)
-
-    def __init__(self, store, **kwargs):
-        super().__init__(**kwargs)
-        self.store = store
-        self._center: Path | None = None
-        self._entries: list[dict] = []
-        self._scroll = 0
-
-    def center_on(self, path: Path) -> None:
-        self._center = path
-        self._build_entries()
-        self.refresh()
-
-    def _build_entries(self) -> None:
-        path = self._center
-        if not path:
-            self._entries = []
-            return
-
-        entries: list[dict] = []
-        _MAX_DEPTH = 2
-
-        # ── Ancestors: inverted tree, deepest (furthest) at top, most indented ──
-        # depth = distance from current node (parent=1, grandparent=2, …)
-        # indent = "    " * (depth - 1)  →  parent has 0 extra indent, root has most
-        up_nodes = self.store.traverse(path, "up")
-        visible_up = [n for n in up_nodes if n["depth"] <= _MAX_DEPTH]
-        cropped_up = any(n["depth"] > _MAX_DEPTH for n in up_nodes)
-
-        if cropped_up:
-            entries.append(
-                {
-                    "path": None,
-                    "is_cropped": True,
-                    "is_ancestor": True,
-                    "tree_prefix": "    " * _MAX_DEPTH + "╭── ",
-                    "is_current": False,
-                    "description": "…",
-                    "node_type": "",
-                    "status": "",
-                    "tl_start": None,
-                    "tl_horizon": None,
-                    "tl_due": None,
-                }
-            )
-
-        for node in sorted(visible_up, key=lambda n: -n["depth"]):
-            ndata = self.store.get(node["path"], {})
-            ts, th, td = _tl_data(ndata, None)
-            entries.append(
-                {
-                    "path": node["path"],
-                    "tree_prefix": "    " * (node["depth"] - 1) + "╭── ",
-                    "is_current": False,
-                    "is_ancestor": True,
-                    "description": node["description"],
-                    "node_type": str(ndata.get("type", "") or ""),
-                    "status": node["status"],
-                    "tl_start": ts,
-                    "tl_horizon": th,
-                    "tl_due": td,
-                }
-            )
-
-        # ── Current node ──────────────────────────────────────────────────────
-        data = self.store.get(path, {})
-        cur_ts, cur_th, cur_td = _tl_data(data, None)
-        entries.append(
-            {
-                "path": path,
-                "tree_prefix": "",
-                "is_current": True,
-                "description": str(data.get("description", "") or get_task_id(path)),
-                "node_type": str(data.get("type", "") or ""),
-                "status": str(data.get("status", "") or ""),
-                "tl_start": cur_ts,
-                "tl_horizon": cur_th,
-                "tl_due": cur_td,
-            }
-        )
-
-        # ── Descendants: DFS with normal tree connectors ───────────────────────
-        visited: set[Path] = {path}
-
-        def _children(p: Path) -> list[Path]:
-            result = []
-            for e in get_how(self.store.get(p, {})):
-                tid = (e.get("target_node") or "").upper()
-                if tid:
-                    child = self.store.find(tid)
-                    if child and child not in visited:
-                        result.append(child)
-            return result
-
-        def _dfs(p: Path, prefix: str, depth: int = 1, parent_start: str | None = None) -> None:
-            kids = _children(p)
-            for i, child in enumerate(kids):
-                last = i == len(kids) - 1
-                connector = "└── " if last else "├── "
-                continuation = "    " if last else "│   "
-                visited.add(child)
-                cd = self.store.get(child, {})
-                ts, th, td = _tl_data(cd, parent_start)
-                entries.append(
-                    {
-                        "path": child,
-                        "tree_prefix": prefix + connector,
-                        "is_current": False,
-                        "description": str(
-                            cd.get("description", "") or get_task_id(child)
-                        ),
-                        "node_type": str(cd.get("type", "") or ""),
-                        "status": str(cd.get("status", "") or ""),
-                        "tl_start": ts,
-                        "tl_horizon": th,
-                        "tl_due": td,
-                    }
-                )
-                if depth < _MAX_DEPTH:
-                    _dfs(child, prefix + continuation, depth + 1, ts)
-                elif _children(child):
-                    # Cropped — show ellipsis placeholder
-                    entries.append(
-                        {
-                            "path": None,
-                            "is_cropped": True,
-                            "tree_prefix": prefix + continuation + "└── ",
-                            "is_current": False,
-                            "description": "…",
-                            "node_type": "",
-                            "status": "",
-                            "tl_start": None,
-                            "tl_horizon": None,
-                            "tl_due": None,
-                        }
-                    )
-
-        _dfs(path, "", 1, cur_ts)
-
-        # Prepend a special "root" entry that navigates to the home page
-        entries.insert(0, {
-            "path": None,
-            "is_root_link": True,
-            "is_current": False,
-            "tree_prefix": "",
-            "description": "root",
-            "status": "",
-            "tl_start": None,
-            "tl_horizon": None,
-            "tl_due": None,
-        })
-
-        self._entries = entries
-        for i, e in enumerate(entries):
-            if e["is_current"]:
-                self.cursor = i
-                break
-
-    def current_path(self) -> Path | None:
-        if 0 <= self.cursor < len(self._entries):
-            return self._entries[self.cursor]["path"]
-        return None
-
-    def _margin_label(self, abs_i: int) -> str:
-        """Return 4-char left margin label for entry at abs_i."""
-        if self._entries[abs_i].get("is_root_link"):
-            return "    "
-        cur = next((j for j, e in enumerate(self._entries) if e["is_current"]), 1)
-        n = len(self._entries)
-        desc_count = n - cur - 1
-        if abs_i == cur:
-            return " ▶  "
-        elif abs_i < cur:
-            # abs_i==0 is root_link; ancestors start at 1
-            anc_pos = abs_i - 1  # 0 = furthest ancestor
-            if anc_pos == 0:
-                return "why "
-            else:
-                return " │  "
-        else:
-            rel = abs_i - cur - 1  # 0 = first descendant
-            if desc_count == 0 or rel == desc_count - 1:
-                return "how "
-            else:
-                return " │  "
-
-    def render(self) -> Text:
-        height = max(self.size.height - 1, 3)
-        if self.cursor < self._scroll:
-            self._scroll = self.cursor
-        elif self._entries and self.cursor >= self._scroll + height:
-            self._scroll = self.cursor - height + 1
-
-        visible = self._entries[self._scroll : self._scroll + height]
-
-        _MARGIN_W = 4   # chars for "why ", " │  ", " ▶  ", "how ", etc.
-        _TYPE_W = 10    # "constraint" is longest type label
-        _STATUS_W = 9   # "discarded" is longest status label
-        _CHIP_GAP = 2   # spaces between desc and type chip, and between chips
-
-        # Compute max (margin + prefix + desc) width for alignment
-        desc_col = 0
-        for i, entry in enumerate(visible):
-            w = (
-                _MARGIN_W
-                + len(entry["tree_prefix"])
-                + len(entry["description"] or "—")
-            )
-            desc_col = max(desc_col, w)
-
-        # Timeline width: whatever remains after desc_col + chips + padding
-        total_width = self.size.width or 80
-        tl_width = max(10, total_width - desc_col - _CHIP_GAP - _TYPE_W - _CHIP_GAP - _STATUS_W - _CHIP_GAP)
-
-        t = Text(no_wrap=True, overflow="ellipsis")
-        for i, entry in enumerate(visible):
-            abs_i = i + self._scroll
-            selected = abs_i == self.cursor
-            margin = self._margin_label(abs_i)
-            prefix = entry["tree_prefix"]
-            desc = entry["description"] or "—"
-            line = Text(no_wrap=True, overflow="ellipsis")
-            is_cropped = entry.get("is_cropped", False)
-            is_ancestor = entry.get("is_ancestor", False)
-            # Margin — always dim, no color (infrastructure chrome)
-            if entry["is_current"]:
-                line.append(margin, style="bold cyan")
-            else:
-                line.append(margin, style="dim")
-            # Tree prefix + description
-            node_type = entry.get("node_type", "")
-            status = entry.get("status", "")
-            _, status_style = STATUSES.get(status, ("", "dim"))
-            _, type_style = TYPES.get(node_type, ("", ""))
-            if entry.get("is_root_link") or is_cropped:
-                line.append(prefix, style="dim blue" if is_ancestor else "dim")
-                line.append(desc, style="dim")
-                used = _MARGIN_W + len(prefix) + len(desc)
-            elif entry["is_current"]:
-                line.append(prefix, style="dim")
-                line.append(desc, style=f"bold {status_style}" if status_style else "bold")
-                used = _MARGIN_W + len(prefix) + len(desc)
-            elif is_ancestor:
-                # Ancestor: round-corner connector in blue, description styled by type
-                line.append(prefix, style="dim blue")
-                line.append(desc, style=type_style or "")
-                used = _MARGIN_W + len(prefix) + len(desc)
-            else:
-                # Descendant: dim connector, description styled by type
-                line.append(prefix, style="dim")
-                line.append(desc, style=type_style or "")
-                used = _MARGIN_W + len(prefix) + len(desc)
-            # Pad desc to fixed column
-            gap = desc_col - used
-            if gap > 0:
-                line.append(" " * gap)
-            # Type chip (fixed width) — skip for root/cropped
-            if not entry.get("is_root_link") and not is_cropped:
-                type_label = TYPES.get(node_type, (node_type, "dim"))[0] if node_type else ""
-                line.append(" " * _CHIP_GAP)
-                line.append(type_label.ljust(_TYPE_W), style=type_style if type_label else "")
-                # Status chip (fixed width)
-                status_label = STATUSES.get(status, (status, "dim"))[0] if status else ""
-                line.append(" " * _CHIP_GAP)
-                line.append(status_label.ljust(_STATUS_W), style=status_style if status_label else "")
-                line.append(" " * _CHIP_GAP)
-            else:
-                line.append(" " * (_CHIP_GAP + _TYPE_W + _CHIP_GAP + _STATUS_W + _CHIP_GAP))
-            # Timeline bar or axis
-            if entry.get("is_root_link"):
-                _append_timeline_axis(line, tl_width)
-            elif is_cropped:
-                # Just the now marker on an otherwise empty line
-                now_col = tl_width // 3
-                chars = [" "] * tl_width
-                if 0 <= now_col < tl_width:
-                    chars[now_col] = "│"
-                line.append("".join(chars), style="dim")
-            else:
-                _append_timeline(line, entry, tl_width)
-            if selected:
-                line.stylize("reverse" if self.has_focus else "dim")
-            t.append_text(line)
-            t.append("\n")
-        return t
-
-    def watch_cursor(self, _: int) -> None:
-        self.refresh()
-
-    def on_focus(self) -> None:
-        for i, e in enumerate(self._entries):
-            if e.get("is_current"):
-                self.cursor = i
-                break
-        self.refresh()
-
-    def on_blur(self) -> None:
-        self.refresh()
-
-    def action_cursor_up(self) -> None:
-        pos = self.cursor - 1
-        while pos > 0 and self._entries[pos].get("is_cropped"):
-            pos -= 1
-        if pos >= 0 and not self._entries[pos].get("is_cropped"):
-            self.cursor = pos
-
-    def action_cursor_down(self) -> None:
-        pos = self.cursor + 1
-        while pos < len(self._entries) - 1 and self._entries[pos].get("is_cropped"):
-            pos += 1
-        if pos < len(self._entries) and not self._entries[pos].get("is_cropped"):
-            self.cursor = pos
-
-    def action_select_node(self) -> None:
-        if 0 <= self.cursor < len(self._entries) and self._entries[self.cursor].get("is_root_link"):
-            self.app.action_go_home()  # type: ignore[attr-defined]
-            return
-        path = self.current_path()
-        if path:
-            self.app._open_node(path, keep_focus=self)  # type: ignore[attr-defined]
-
-    def action_preview_node(self) -> None:
-        path = self.current_path()
-        if path:
-            self.app._preview_node(path)  # type: ignore[attr-defined]
-
-    def action_edit_right(self) -> None:
-        """Switch focus to task pane and start editing."""
-        pane = self.app.query_one("#task-pane", TaskPane)  # type: ignore[attr-defined]
-        pane.focus()
-        pane.action_edit()
-
-    def action_new_task(self) -> None:
-        self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
-
-    def _on_new_task(self, description: str | None) -> None:
-        if not description:
-            return
-        path = self.app._create_node(description)  # type: ignore[attr-defined]
-        self.app._open_node(path)  # type: ignore[attr-defined]
-
-    def action_delete_task(self) -> None:
-        path = self.current_path()
-        if path is None:
-            return
-        desc = str(self.store.get(path, {}).get("description", "") or path.stem)
-        self.app.push_screen(  # type: ignore[attr-defined]
-            ConfirmModal(f"Delete '{desc}' ?"),
-            lambda ok: self._on_delete_confirmed(ok, path),
-        )
-
-    def _on_delete_confirmed(self, ok: bool, path: Path) -> None:
-        if not ok:
-            return
-        self.store.remove(path)
-        if path == self._center:
-            self.app.action_go_home()  # type: ignore[attr-defined]
-        else:
-            self._build_entries()
-            self.refresh()
-
-
-class HomePage(Widget, can_focus=True):
-    """Startup view: root nodes + one level of children."""
-
-    BINDINGS = [
-        Binding("up", "cursor_up", show=False),
-        Binding("down", "cursor_down", show=False),
-        Binding("enter", "open_node", "Open", show=True),
-        Binding("n", "new_task", "New", show=True),
-    ]
-
-    cursor: reactive[int] = reactive(0)
-
-    def __init__(self, store, **kwargs):
-        super().__init__(**kwargs)
-        self.store = store
-        self._entries: list[dict] = []
-        self._scroll = 0
-
-    def on_mount(self) -> None:
-        self.refresh_entries()
-
-    def refresh_entries(self) -> None:
-        has_parent: set[Path] = set()
-        for data in self.store._data.values():
-            for entry in get_how(data):
-                tid = (entry.get("target_node") or "").upper()
-                if tid:
-                    tp = self.store.find(tid)
-                    if tp:
-                        has_parent.add(tp)
-
-        sorted_nodes = self.store.sort()
-        entries: list[dict] = []
-        seen: set[Path] = set()
-
-        for path, _ in sorted_nodes:
-            if path in has_parent:
-                continue
-            if path in seen:
-                continue
-            seen.add(path)
-            data = self.store.get(path, {})
-            entries.append(
-                {
-                    "path": path,
-                    "indent": 0,
-                    "description": str(
-                        data.get("description", "") or get_task_id(path)
-                    ),
-                    "status": str(data.get("status", "") or ""),
-                    "type": str(data.get("type", "") or ""),
-                }
-            )
-            for entry in get_how(data):
-                tid = (entry.get("target_node") or "").upper()
-                if tid:
-                    child_path = self.store.find(tid)
-                    if child_path and child_path not in seen:
-                        seen.add(child_path)
-                        cd = self.store.get(child_path, {})
-                        entries.append(
-                            {
-                                "path": child_path,
-                                "indent": 1,
-                                "description": str(
-                                    cd.get("description", "") or get_task_id(child_path)
-                                ),
-                                "status": str(cd.get("status", "") or ""),
-                                "type": str(cd.get("type", "") or ""),
-                            }
-                        )
-
-        self._entries = entries
-        self.cursor = max(0, min(self.cursor, len(entries) - 1))
-        self.refresh()
-
-    def render(self) -> Text:
-        height = max(self.size.height - 1, 3)
-        if self.cursor < self._scroll:
-            self._scroll = self.cursor
-        elif self._entries and self.cursor >= self._scroll + height:
-            self._scroll = self.cursor - height + 1
-
-        t = Text(no_wrap=True, overflow="ellipsis")
-        for i, entry in enumerate(self._entries[self._scroll : self._scroll + height]):
-            abs_i = i + self._scroll
-            selected = abs_i == self.cursor
-            indent = "  " * entry["indent"]
-            desc = entry["description"] or "—"
-            status = entry["status"]
-            task_type = entry["type"]
-            line = Text(no_wrap=True, overflow="ellipsis")
-            line.append(f"{indent} {desc}")
-            if task_type:
-                line.append(f"  {task_type}", style=TYPE_STYLES.get(task_type, "dim"))
-            if status:
-                line.append(f"  {status}", style=STATUS_STYLES.get(status, "dim"))
-            if selected:
-                line.stylize("reverse" if self.has_focus else "dim")
-            t.append_text(line)
-            t.append("\n")
-
-        t.append(
-            f" {len(self._entries)} node{'s' if len(self._entries) != 1 else ''}",
-            style="dim",
-        )
-        return t
-
-    def watch_cursor(self, _: int) -> None:
-        self.refresh()
-
-    def on_focus(self) -> None:
-        self.refresh()
-
-    def on_blur(self) -> None:
-        self.refresh()
-
-    def action_cursor_up(self) -> None:
-        if self.cursor > 0:
-            self.cursor -= 1
-
-    def action_cursor_down(self) -> None:
-        if self.cursor < len(self._entries) - 1:
-            self.cursor += 1
-
-    def action_open_node(self) -> None:
-        if 0 <= self.cursor < len(self._entries):
-            path = self._entries[self.cursor]["path"]
-            if path:
-                self.app._open_node(path)  # type: ignore[attr-defined]
-
-    def action_new_task(self) -> None:
-        self.app.push_screen(NewTaskModal(), self._on_new_task)  # type: ignore[attr-defined]
-
-    def _on_new_task(self, description: str | None) -> None:
-        if not description:
-            return
-        path = self.app._create_node(description)  # type: ignore[attr-defined]
-        self.app._open_node(path)  # type: ignore[attr-defined]
-
-
-# ── Link picker pane ──────────────────────────────────────────────────────────
-
-_CREATE_NEW = "✦  Create new task…"
-
-
-class LinkPickerPane(Widget, can_focus=True):
-    BINDINGS = [
-        Binding("up", "cursor_up", show=False),
-        Binding("down", "cursor_down", show=False),
-        Binding("enter", "select", "Link", show=True),
-        Binding("escape", "cancel", "Cancel", show=True),
-    ]
-
-    cursor: reactive[int] = reactive(0)
-
-    def __init__(self, vault: Path, store: dict[Path, dict], **kwargs):
-        super().__init__(**kwargs)
-        self.vault = vault
-        self.store = store
-        self._files: list[Path] = []
-        self._scores: dict[Path, float] = {}
-        self._searching = False
-        self._query = ""
-        self._scroll = 0
-
-    def refresh_files(self, scores: dict[Path, float] | None = None) -> None:
-        if scores is not None:
-            self._scores = scores
-        else:
-            self._scores = {}
-        self._apply_filter()
-
-    def _apply_filter(self) -> None:
-        q = self._query.lower()
-        all_files = sorted(self.store.keys(), key=lambda p: -self._scores.get(p, 0.0))
-        self._files = [
-            p
-            for p in all_files
-            if not q
-            or q in str(self.store[p].get("description", "") or p.stem).lower()
-            or q in p.stem.lower()
-        ]
-        self.cursor = 0
-        self._scroll = 0
-        self.refresh()
-
-    def on_key(self, event) -> None:
-        if self._searching:
-            if event.key == "escape":
-                self._searching = False
-                self._query = ""
-                self._apply_filter()
-                event.stop()
-            elif event.key == "backspace":
-                self._query = self._query[:-1]
-                self._apply_filter()
-                event.stop()
-            elif event.key == "enter":
-                self._searching = False
-                self.refresh()
-                event.stop()
-            elif event.character and event.character.isprintable():
-                self._query += event.character
-                self._apply_filter()
-                event.stop()
-        elif event.character == "/":
-            self._searching = True
-            self._query = ""
-            self.refresh()
-            event.stop()
-
-    def render(self) -> Text:
-        height = max(self.size.height - 1, 3)
-        if self.cursor < self._scroll:
-            self._scroll = self.cursor
-        elif self.cursor >= self._scroll + height:
-            self._scroll = self.cursor - height + 1
-
-        entries: list[Path | None] = [None] + self._files
-        t = Text(no_wrap=True, overflow="ellipsis")
-        for i, entry in enumerate(entries[self._scroll : self._scroll + height]):
-            abs_i = i + self._scroll
-            selected = abs_i == self.cursor
-            line = Text(no_wrap=True, overflow="ellipsis")
-            if entry is None:
-                line.append(f" {_CREATE_NEW}", style="bold green")
-            else:
-                data = self.store.get(entry, {})
-                desc = str(data.get("description", "") or entry.stem)
-                status = str(data.get("status", "") or "")
-                line.append(f" {desc}")
-                if status:
-                    line.append(f" [{status}]", style=STATUS_STYLES.get(status, "dim"))
-            if selected:
-                line.stylize("reverse" if self.has_focus else "dim")
-            t.append_text(line)
-            t.append("\n")
-
-        if self._searching:
-            t.append(f" /{self._query}▋", style="bold yellow")
-        else:
-            t.append(" / to search", style="dim")
-        return t
-
-    def watch_cursor(self, _value: int) -> None:
-        self.refresh()
-
-    def action_cursor_up(self) -> None:
-        if self.cursor > 0:
-            self.cursor -= 1
-
-    def action_cursor_down(self) -> None:
-        if self.cursor < len(self._files):
-            self.cursor += 1
-
-    def action_select(self) -> None:
-        if self.cursor == 0:
-            self.app._create_and_link()  # type: ignore[attr-defined]
-        else:
-            self.app._apply_link(self._files[self.cursor - 1])  # type: ignore[attr-defined]
-
-    def action_cancel(self) -> None:
-        self.app._cancel_link()  # type: ignore[attr-defined]
-
-
-# ── Inline input & non-focusable list ────────────────────────────────────────
-
-
-class _InlineInput(Input):
-    """Inline editor — Escape is not consumed so it bubbles to TaskPane.on_key."""
-
-    def _on_key(self, event) -> None:
-        if event.key != "escape":
-            super()._on_key(event)
-
-
-class _TaskList(ListView, can_focus=False):
-    """ListView that never steals focus — TaskPane owns all keyboard handling."""
-
-
-# ── Task row item ─────────────────────────────────────────────────────────────
-
-
-class TaskRowItem(ListItem):
-    """A single row in the task view."""
-
-    selected: reactive[bool] = reactive(False)
-
-    def __init__(
-        self,
-        row: Row,
-        data: dict,
-        store: dict | None = None,
-        link_desc_width: int = 0,
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._row = row
-        self._data = data
-        self._store = store or {}
-        self._link_desc_width = link_desc_width
-        self._cursor_active: bool = False  # True = focused panel, use reverse
-
-    def compose(self) -> ComposeResult:
-        yield Label(self._make_renderable(), id="row-label")
-
-    def on_mount(self) -> None:
-        if self._row.kind == "text":
-            self.add_class("--text")
-
-    def watch_selected(self, _value: bool) -> None:
-        self.refresh_label()
-
-    def _make_renderable(self) -> Text:
-        kind = self._row.kind
-        cursor_style = "reverse" if self._cursor_active else "dim"
-
-        if kind == "spacer":
-            return Text("")
-
-        if kind == "text":
-            text = get_row_text(self._row, self._data)
-            t = Text(overflow="fold")
-            t.append(f" ── {self._row.field} \n", style="bold cyan")
-            if text:
-                for line in text.splitlines():
-                    t.append(f"   {line}\n", style="dim")
-            else:
-                t.append("   (empty)\n", style="dim")
-            if self.selected:
-                t.stylize(cursor_style)
-            return t
-
-        t = Text(no_wrap=True, overflow="ellipsis")
-
-        if kind == "simple":
-            text = get_row_text(self._row, self._data)
-            t.append(f" {self._row.field:<14}", style="dim")
-            t.append(text)
-
-        elif kind == "how_header":
-            t.append(" ── how ", style="bold cyan")
-
-        elif kind == "how_add":
-            t.append("    +", style="dim")
-
-        elif kind == "how_item":
-            how = get_how(self._data)
-            entry = (
-                how[self._row.idx]
-                if self._row.idx is not None and self._row.idx < len(how)
-                else {}
-            )
-            desc = _resolve_entry_desc(entry, self._store)
-            target = str(entry.get("target_node", "") or "")
-            t.append("    • ")
-            t.append(desc, style="" if desc else "dim")
-            _pad(t, desc, self._link_desc_width)
-            if target:
-                target_path = find_path_by_id(target, self._store)
-                if target_path:
-                    _append_chips(t, self._store.get(target_path, {}))
-                t.append(f"  #{target}", style="color(8)")
-            else:
-                _append_chips(t, entry)
-
-        elif kind == "constrain_header":
-            ct = CONSTRAIN_TYPE_MAP.get(self._row.field)
-            label = ct.label if ct else self._row.field
-            t.append(f" ── {label} ", style="bold magenta")
-
-        elif kind == "constrain_add":
-            t.append("    +", style="dim")
-
-        elif kind == "constrain_item":
-            constrain = get_constrain(self._data)
-            entry = (
-                constrain[self._row.idx]
-                if self._row.idx is not None and self._row.idx < len(constrain)
-                else {}
-            )
-            desc = _resolve_entry_desc(entry, self._store)
-            target = str(entry.get("target_node", "") or "")
-            target_path = find_path_by_id(target, self._store) if target else None
-            t.append("    • ")
-            t.append(desc, style="" if desc else "dim")
-            _pad(t, desc, self._link_desc_width)
-            if target_path:
-                _append_chips(t, self._store.get(target_path, {}))
-            elif target:
-                t.append(f"  #{target}", style="bold red")
-
-        elif kind == "why_header":
-            t.append(" ── why ", style="bold magenta")
-
-        elif kind == "why_item":
-            desc = self._row.backlink_desc or "—"
-            t.append("    ← ", style="magenta")
-            t.append(desc)
-            _pad(t, desc, self._link_desc_width)
-            if self._row.backlink_path:
-                _append_chips(t, self._store.get(self._row.backlink_path, {}))
-
-        elif kind == "why_add":
-            t.append("    ← ", style="dim magenta")
-            t.append("[link to a parent…]", style="dim")
-
-        if self.selected:
-            t.stylize(cursor_style)
-        return t
-
-    def refresh_label(self) -> None:
-        try:
-            self.query_one("#row-label", Label).update(self._make_renderable())
-        except Exception:
-            pass
-
-    def begin_edit(self, value: str) -> None:
-        try:
-            self.query_one("#row-label", Label).display = False
-        except Exception:
-            pass
-        inp = _InlineInput(value=value, id="inline-input")
-        self.mount(inp)
-        inp.focus()
-        inp.cursor_position = len(value)
-
-    def end_edit(self) -> None:
-        """Remove inline input and restore label from current data."""
-        try:
-            self.query_one("#inline-input", Input).remove()
-        except Exception:
-            pass
-        try:
-            lbl = self.query_one("#row-label", Label)
-            lbl.update(self._make_renderable())
-            lbl.display = True
-        except Exception:
-            pass
-
-
-# ── Task pane ─────────────────────────────────────────────────────────────────
-
-
-class TaskPane(Widget, can_focus=True):
-    BINDINGS = [
-        Binding("up", "cursor_up", show=False),
-        Binding("down", "cursor_down", show=False),
-        Binding("enter", "follow_link", "Follow", show=True),
-        Binding("e", "edit", "Edit", show=True),
-        Binding("n", "insert", "New", show=True),
-        Binding("d", "delete", "Delete", show=True),
-        Binding("a", "add_field", "Add field", show=True),
-        Binding("l", "link", "Link", show=True),
-        Binding("u", "unlink", "Unlink", show=True),
-        Binding("escape", "back_to_nav", "Files", show=True),
-    ]
-
-    def __init__(self, path: Path | None = None, **kwargs):
-        super().__init__(**kwargs)
-        self.path = path
-        self.data: dict = load_task(path) if path else {}
-        self.rows: list[Row] = build_rows(self.data)
-        self._all_rows: list[Row] = list(self.rows)
-        self._cursor_idx: int = 0
-        self._items: list[TaskRowItem] = []
-        self._editing: bool = False
-        self._edit_original: str = ""
-        self._edit_is_new: bool = False
-        # pending link operation
-        self._link_pending_section: str | None = None  # "how" | "constrain"
-        self._link_pending_type: str | None = None  # constrain type name
-        self._link_pending_idx: int = -1  # index in list, or -1 for new
-        # why rows count (set by _rebuild, used for cursor conversion)
-        self._n_why_rows: int = 0
-
-    def compose(self) -> ComposeResult:
-        yield _TaskList(id="task-list")
-
-    def on_mount(self) -> None:
-        if self.path:
-            self._rebuild()
-
-    def on_focus(self) -> None:
-        old_idx = self._cursor_idx
-        self._cursor_idx = 0
-        if 0 <= old_idx < len(self._items) and old_idx != 0:
-            self._items[old_idx].selected = False
-        if self._items:
-            item = self._items[0]
-            item._cursor_active = True
-            item.selected = True
-            item.refresh_label()  # explicit: reactive may not fire if selected unchanged
-
-    def on_blur(self) -> None:
-        item = self._current_item()
-        if item:
-            item._cursor_active = False
-            item.refresh_label()
-
-    def _lv(self) -> _TaskList:
-        return self.query_one("#task-list", _TaskList)
-
-    def _rebuild(self, keep_cursor: int = 0) -> None:
-        """Rebuild the displayed row list with blank-line spacers between sections.
-
-        Display order:
-            description
-            [spacer]
-            other scalar fields
-            [spacer]
-            why section
-            [spacer]
-            how section
-            [spacer]
-            each constrain group
-
-        keep_cursor is an index into self.rows; we locate the target row by
-        object identity in all_rows (spacers are new objects, so they are skipped).
-        """
-        lv = self._lv()
-        lv.clear()
-        self._items = []
-
-        scalar_rows = [r for r in self.rows if r.kind in ("simple", "text")]
-        section_rows = [r for r in self.rows if r.kind not in ("simple", "text")]
-
-        why_rows: list[Row] = []
-        if self.path:
-            try:
-                why_rows = build_backlink_rows(self.path, self.app.store)
-            except Exception:
-                pass
-        self._n_why_rows = len(why_rows)
-
-        # Split scalar_rows into description + metadata
-        desc_rows = scalar_rows[:1]
-        meta_rows = scalar_rows[1:]
-
-        # Split section_rows into how group + per-type constrain groups
-        how_group = [r for r in section_rows if r.kind.startswith("how_")]
-        constrain_groups: list[list[Row]] = []
-        cur: list[Row] = []
-        for r in section_rows:
-            if r.kind == "constrain_header":
-                if cur:
-                    constrain_groups.append(cur)
-                cur = [r]
-            elif r.kind in ("constrain_item", "constrain_add"):
-                cur.append(r)
-        if cur:
-            constrain_groups.append(cur)
-
-        # Assemble with spacers between non-empty sections
-        def _join(*groups: list[Row]) -> list[Row]:
-            result: list[Row] = []
-            for g in groups:
-                if not g:
-                    continue
-                if result:
-                    result.append(Row("spacer", "", None))
-                result.extend(g)
-            return result
-
-        all_rows = _join(
-            desc_rows,
-            meta_rows,
-            why_rows,
-            how_group,
-            *constrain_groups,
-        )
-
-        # Locate keep_cursor target by object identity (skips spacers naturally)
-        target = self.rows[keep_cursor] if 0 <= keep_cursor < len(self.rows) else None
-        new_cursor = 0
-        if target is not None:
-            for i, r in enumerate(all_rows):
-                if r is target:
-                    new_cursor = i
-                    break
-
-        self._all_rows = all_rows
-        self._cursor_idx = new_cursor
-
-        # Compute max description width for column alignment
-        _link_kinds = {"how_item", "constrain_item"}
-        link_desc_width = 0
-        for row in all_rows:
-            if row.kind in _link_kinds:
-                d = get_row_text(row, self.data, store=self.app.store)
-                link_desc_width = max(link_desc_width, len(d))
-            elif row.kind == "why_item":
-                link_desc_width = max(link_desc_width, len(row.backlink_desc or ""))
-
-        for i, row in enumerate(all_rows):
-            item = TaskRowItem(
-                row, self.data, store=self.app.store, link_desc_width=link_desc_width
-            )
-            item._cursor_active = self.has_focus
-            item.selected = i == self._cursor_idx
-            self._items.append(item)
-            lv.append(item)
-
-    def _set_cursor(self, new_idx: int) -> None:
-        if 0 <= self._cursor_idx < len(self._items):
-            self._items[self._cursor_idx].selected = False
-        self._cursor_idx = new_idx
-        if 0 <= new_idx < len(self._items):
-            item = self._items[new_idx]
-            item._cursor_active = self.has_focus
-            item.selected = True
-            self._lv().scroll_to_widget(item)
-
-    def current_row(self) -> Row | None:
-        idx = self._cursor_idx
-        rows = getattr(self, "_all_rows", self.rows)
-        if 0 <= idx < len(rows):
-            return rows[idx]
-        return None
-
-    def _current_item(self) -> TaskRowItem | None:
-        idx = self._cursor_idx
-        return self._items[idx] if 0 <= idx < len(self._items) else None
-
-    def action_cursor_up(self) -> None:
-        idx = self._cursor_idx - 1
-        while idx >= 0 and self._all_rows[idx].kind == "spacer":
-            idx -= 1
-        if idx >= 0:
-            self._set_cursor(idx)
-
-    def action_cursor_down(self) -> None:
-        rows = self._all_rows
-        idx = self._cursor_idx + 1
-        while idx < len(rows) and rows[idx].kind == "spacer":
-            idx += 1
-        if idx < len(rows):
-            self._set_cursor(idx)
-
-    def action_follow_link(self) -> None:
-        if self._editing:
-            return
-        row = self.current_row()
-        if row is None:
-            return
-        if row.kind in ("how_add", "constrain_add"):
-            self.action_insert()
-            return
-        if row.kind == "how_item" and row.idx is not None:
-            how = get_how(self.data)
-            if row.idx < len(how):
-                target_id = how[row.idx].get("target_node")
-                if target_id:
-                    self.app.navigate_to_id(target_id)  # type: ignore[attr-defined]
-        elif row.kind == "why_item" and row.backlink_path:
-            self.app._open_node(row.backlink_path)  # type: ignore[attr-defined]
-
-    # ── Edit ──────────────────────────────────────────────────────────────────
-
-    def action_edit(self) -> None:
-        if not self.path or self._editing:
-            return
-        row = self.current_row()
-        item = self._current_item()
-        if row is None or not row.editable or item is None:
-            return
-        # Picker fields: open a selection modal instead of inline text input
-        if row.kind == "simple" and row.field in _PICKER_FIELDS:
-            current = str(self.data.get(row.field, "") or "")
-            self.app.push_screen(  # type: ignore[attr-defined]
-                ValuePickerModal(row.field, current),
-                lambda val, r=row: self._on_picker_chosen(val, r),
-            )
-            return
-        self._editing = True
-        if row.kind == "how_item" and row.idx is not None:
-            how = get_how(self.data)
-            edit_text = (
-                str(how[row.idx].get("description", "") or "")
-                if row.idx < len(how)
-                else ""
-            )
-        elif row.kind == "constrain_item" and row.idx is not None:
-            constrain = get_constrain(self.data)
-            edit_text = (
-                str(constrain[row.idx].get("description", "") or "")
-                if row.idx < len(constrain)
-                else ""
-            )
-        else:
-            edit_text = get_row_text(row, self.data)
-        self._edit_original = edit_text
-        item.begin_edit(edit_text)
-
-    def _on_picker_chosen(self, value: str | None, row: Row) -> None:
-        if value is None or not self.path:
-            return
-        set_row_text(row, self.data, value)
-        self._save()
-        self.rows = build_rows(self.data)
-        self._rebuild(keep_cursor=self._cursor_idx)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not self._editing:
-            return
-        row = self.current_row()
-        item = self._current_item()
-        if row and item:
-            set_row_text(row, self.data, event.value)
-            self._save()
-            item.end_edit()
-        self._editing = False
-        self._edit_original = ""
-        self._edit_is_new = False
-        self.focus()
-        event.stop()
-
-    def on_key(self, event) -> None:
-        if self._editing and event.key == "escape":
-            row = self.current_row()
-            item = self._current_item()
-            if self._edit_is_new:
-                if item:
-                    item.end_edit()
-                self._editing = False
-                self._edit_original = ""
-                self._edit_is_new = False
-                self.action_delete()
-            else:
-                if row:
-                    set_row_text(row, self.data, self._edit_original)
-                if item:
-                    item.end_edit()
-                self._editing = False
-                self._edit_original = ""
-            self.focus()
-            event.stop()
-
-    # ── Insert / Delete ───────────────────────────────────────────────────────
-
-    def action_insert(self) -> None:
-        row = self.current_row()
-        if row is None or not self.path:
-            return
-
-        if row.kind in ("how_header", "how_item", "how_add"):
-            insert_at = (
-                row.idx + 1
-                if row.kind == "how_item" and row.idx is not None
-                else len(self.data.get("how", []))
-            )
-            self.app.push_screen(  # type: ignore[attr-defined]
-                NewTaskModal(),
-                lambda desc, at=insert_at: self._on_new_how_node(desc, at),
-            )
-
-        elif row.kind in ("constrain_header", "constrain_item", "constrain_add"):
-            ct_name = row.field
-            constrain = self.data.setdefault("constrain", [])
-            if row.kind == "constrain_item" and row.idx is not None:
-                insert_at = row.idx + 1
-            else:
-                positions = [
-                    i for i, e in enumerate(constrain) if e.get("type") == ct_name
-                ]
-                insert_at = (positions[-1] + 1) if positions else len(constrain)
-            constrain.insert(insert_at, {"type": ct_name, "description": ""})
-            self._save()
-            self.rows = build_rows(self.data)
-            cursor_pos = 0
-            for i, r in enumerate(self.rows):
-                if (
-                    r.kind == "constrain_item"
-                    and r.field == ct_name
-                    and r.idx == insert_at
-                ):
-                    cursor_pos = i
-                    break
-            self._rebuild(keep_cursor=cursor_pos)
-            self._edit_is_new = True
-            self.action_edit()
-
-    def action_delete(self) -> None:
-        row = self.current_row()
-        if row is None or not self.path:
-            return
-
-        if row.kind == "how_item" and row.idx is not None:
-            how = get_how(self.data)
-            if row.idx < len(how):
-                how.pop(row.idx)
-            self.data["how"] = how
-        elif row.kind == "constrain_item" and row.idx is not None:
-            constrain = get_constrain(self.data)
-            if row.idx < len(constrain):
-                constrain.pop(row.idx)
-            self.data["constrain"] = constrain
-        elif row.kind == "simple" and row.field != "description":
-            self.data.pop(row.field, None)
-        elif row.kind == "text":
-            self.data.pop(row.field, None)
-        else:
-            return
-
-        self._save()
-        self.rows = build_rows(self.data)
-        self._rebuild(keep_cursor=max(0, min(self._cursor_idx, len(self.rows) - 1)))
-
-    def _on_new_how_node(self, description: str | None, insert_at: int) -> None:
-        if not description or not self.path:
-            return
-        path = self.app._create_node(description)  # type: ignore[attr-defined]
-        how = self.data.setdefault("how", [])
-        how.insert(insert_at, {"target_node": get_task_id(path)})
-        self._save()
-        self.rows = build_rows(self.data)
-        cursor_pos = 0
-        for i, r in enumerate(self.rows):
-            if r.kind == "how_item" and r.idx == insert_at:
-                cursor_pos = i
-                break
-        self._rebuild(keep_cursor=cursor_pos)
-
-    # ── Add field ─────────────────────────────────────────────────────────────
-
-    def action_add_field(self) -> None:
-        missing = []
-        for key, ftype in FIELDS.items():
-            if key == "description":
-                continue
-            val = self.data.get(key)
-            if not val or not str(val).strip():
-                missing.append(key)
-        if not get_how(self.data):
-            missing.append("how")
-        constrain = get_constrain(self.data)
-        present_ct = {e.get("type") for e in constrain}
-        for ct in CONSTRAIN_TYPES:
-            if ct.name not in present_ct:
-                missing.append(ct.name)
-        if missing:
-            self.app.push_screen(  # type: ignore[attr-defined]
-                AddSectionModal(missing), self._on_field_chosen
-            )
-
-    def _on_field_chosen(self, field: str | None) -> None:
-        if not field or not self.path:
-            return
-        if field == "how":
-            insert_at = len(self.data.get("how", []))
-            self.app.push_screen(  # type: ignore[attr-defined]
-                NewTaskModal(),
-                lambda desc, at=insert_at: self._on_new_how_node(desc, at),
-            )
-        elif field in CONSTRAIN_TYPE_MAP:
-            constrain = self.data.setdefault("constrain", [])
-            constrain.append({"type": field, "description": ""})
-            self._save()
-            self.rows = build_rows(self.data)
-            cursor_pos = 0
-            for i, r in enumerate(self.rows):
-                if r.kind == "constrain_item" and r.field == field:
-                    cursor_pos = i
-                    break
-            self._rebuild(keep_cursor=cursor_pos)
-            self._edit_is_new = True
-            self.action_edit()
-        else:
-            self.data[field] = ""
-            self._save()
-            self.rows = build_rows(self.data)
-            cursor_pos = 0
-            for i, r in enumerate(self.rows):
-                if r.field == field and r.kind in ("simple", "text"):
-                    cursor_pos = i
-                    break
-            self._rebuild(keep_cursor=cursor_pos)
-            self._edit_is_new = True
-            self.action_edit()
-
-    # ── Linking ───────────────────────────────────────────────────────────────
-
-    def action_back_to_nav(self) -> None:
-        if not self._editing:
-            try:
-                self.app.query_one("#subgraph", SubgraphPane).focus()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-
-    def action_link(self) -> None:
-        """Open link picker for the current section."""
-        if self._editing or not self.path:
-            return
-        row = self.current_row()
-        if row and row.kind in ("why_header", "why_item", "why_add"):
-            self.app._start_linking_why()  # type: ignore[attr-defined]
-        elif row and row.kind in ("how_header", "how_item", "how_add"):
-            pending_idx = row.idx if row.kind == "how_item" else -1
-            self.app._start_linking("how", None, pending_idx)  # type: ignore[attr-defined]
-        elif row and row.kind in (
-            "constrain_header",
-            "constrain_item",
-            "constrain_add",
-        ):
-            pending_idx = row.idx if row.kind == "constrain_item" else -1
-            self.app._start_linking("constrain", row.field, pending_idx)  # type: ignore[attr-defined]
-        else:
-            available = ["how"] + [ct.name for ct in CONSTRAIN_TYPES]
-            self.app.push_screen(  # type: ignore[attr-defined]
-                AddSectionModal(available, title="Link as:"),
-                self._on_link_type_chosen,
-            )
-
-    def _on_link_type_chosen(self, section: str | None) -> None:
-        if not section or not self.path:
-            return
-        if section == "how":
-            self.app._start_linking("how", None, -1)  # type: ignore[attr-defined]
-        elif section in CONSTRAIN_TYPE_MAP:
-            self.app._start_linking("constrain", section, -1)  # type: ignore[attr-defined]
-
-    def action_unlink(self) -> None:
-        """Clear target_node from the current link entry."""
-        if self._editing:
-            return
-        row = self.current_row()
-        if row is None or not self.path:
-            return
-        if row.kind == "how_item" and row.idx is not None:
-            how = get_how(self.data)
-            if row.idx < len(how) and how[row.idx].get("target_node"):
-                self.app.push_screen(  # type: ignore[attr-defined]
-                    ConfirmModal("Remove target from this link?"),
-                    lambda ok: self._on_unlink_confirmed(ok, "how", row.idx),
-                )
-        elif row.kind == "constrain_item" and row.idx is not None:
-            constrain = get_constrain(self.data)
-            if row.idx < len(constrain) and constrain[row.idx].get("target_node"):
-                self.app.push_screen(  # type: ignore[attr-defined]
-                    ConfirmModal("Remove target from this link?"),
-                    lambda ok: self._on_unlink_confirmed(ok, "constrain", row.idx),
-                )
-
-    def _on_unlink_confirmed(self, ok: bool, section: str, idx: int) -> None:
-        if not ok or not self.path:
-            return
-        if section == "how":
-            how = get_how(self.data)
-            if idx < len(how):
-                how[idx].pop("target_node", None)
-        elif section == "constrain":
-            constrain = get_constrain(self.data)
-            if idx < len(constrain):
-                constrain[idx].pop("target_node", None)
-        self._save()
-        self.rows = build_rows(self.data)
-        self._rebuild(keep_cursor=self._cursor_idx)
-
-    # ── Public API for App ────────────────────────────────────────────────────
-
-    def _save(self) -> None:
-        """Persist current data and notify the subgraph to recompute."""
-        if self.path:
-            self.app.store.save(self.path, self.data)
-            self.app._refresh_subgraph()  # type: ignore[attr-defined]
-
-    def load(self, path: Path, data: dict) -> None:
-        """Load a node into the pane and refresh display."""
-        self.path = path
-        self.data = data
-        self.rows = build_rows(data)
-        self._rebuild()
-
-    def begin_link(self, section: str, constrain_type: str | None, link_idx: int) -> None:
-        self._link_pending_section = section
-        self._link_pending_type = constrain_type
-        self._link_pending_idx = link_idx
-
-    def clear_link_pending(self) -> None:
-        self._link_pending_section = None
-        self._link_pending_type = None
-        self._link_pending_idx = -1
-
-    def rebuild_in_place(self) -> None:
-        """Rebuild keeping the cursor at its current position."""
-        self._rebuild(keep_cursor=self._cursor_idx)
-
-
-# ── Add-section modal ─────────────────────────────────────────────────────────
-
-
-class AddSectionModal(ModalScreen[Optional[str]]):
-    CSS = """\
-    AddSectionModal { align: center middle; }
-    #modal-box {
-        width: 40; height: auto; max-height: 20;
-        border: solid $primary; background: $surface; padding: 1 2;
-    }
-    #modal-box > Label { margin-bottom: 1; }
-    """
-    BINDINGS = [Binding("escape", "dismiss", show=False)]
-
-    def __init__(self, available: list[str], title: str = "Add field:") -> None:
-        super().__init__()
-        self._available = available
-        self._title = title
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="modal-box"):
-            yield Label(self._title)
-            with ListView():
-                for name in self._available:
-                    yield ListItem(Label(name), id=f"section-{name}")
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.dismiss(event.item.id.removeprefix("section-"))
-
-
-# ── App ───────────────────────────────────────────────────────────────────────
-
-APP_CSS = """\
-Screen { layout: vertical; }
-
-#panes { height: 1fr; }
-
-#left-switcher {
-    width: 2fr;
-    height: 1fr;
-}
-
-#right-switcher {
-    width: 1fr;
-    height: 1fr;
-}
-
-_AppHeader {
-    height: 3;
-    width: 1fr;
-    padding: 0 2;
-    background: $boost;
-    border: solid $surface-lighten-2;
-    text-style: bold;
-    content-align: left middle;
-}
-
-SubgraphPane, HomePage, TaskPane, LinkPickerPane {
-    width: 1fr;
-    height: 1fr;
-    border: solid $surface-lighten-2;
-    padding: 0 1;
-    layout: vertical;
-}
-
-SubgraphPane:focus, HomePage:focus, TaskPane:focus, LinkPickerPane:focus {
-    border: solid $primary;
-}
-
-LinkPickerPane {
-    border: solid $accent;
-}
-
-
-_TaskList {
-    height: 1fr;
-    background: transparent;
-    padding: 1 1 0 1;
-}
-
-TaskRowItem {
-    height: 1;
-    padding: 0 0;
-    background: transparent;
-}
-
-TaskRowItem.--text {
-    height: auto;
-}
-
-TaskRowItem > Label {
-    width: 1fr;
-    padding: 0;
-    background: transparent;
-}
-
-TaskRowItem.--text > Label {
-    height: auto;
-}
-
-TaskRowItem > Input {
-    height: 1;
-    border: none;
-    padding: 0 1;
-    background: $surface;
-}
-
-/* Disable ListView's default highlight — we use Rich `reverse` on the label text instead */
-TaskRowItem.--highlight {
-    background: transparent;
-}
-"""
+from pfq.render import PALETTE, render_to_table, render_to_text
+from pfq.view import ViewRow, build_home_view, build_node_view
 
 
 class PfqApp(App):
-    CSS = APP_CSS
     ENABLE_COMMAND_PALETTE = False
-
+    TITLE = "pfq"
+    LAYERS = ["default", "overlay"]
+    CSS = f"""
+    DataTable {{
+        background: $background;
+    }}
+    DataTable:focus {{
+        background-tint: transparent;
+    }}
+    DataTable > .datatable--header {{
+        background: transparent;
+        color: $foreground 30%;
+        text-style: none;
+    }}
+    DataTable > .datatable--even-row {{
+        background: $background;
+    }}
+    DataTable:focus > .datatable--cursor {{
+        background: {PALETTE['cell_bg']};
+        color: {PALETTE['cell_fg']};
+    }}
+    DataTable > .datatable--cursor {{
+        background: $background;
+        color: $foreground;
+        text-style: none;
+    }}
+    DataTable {{
+        margin: 1 1 1 1;
+    }}
+    #axis-label {{
+        color: $foreground 30%;
+        margin: 0 1 1 1;
+        height: 1;
+    }}
+    #app-header {{
+        dock: top;
+        height: 1;
+        background: $panel;
+        color: $foreground;
+        content-align: left middle;
+        padding: 0 1;
+    }}
+    """
     BINDINGS = [
-        Binding("h", "go_home", "Home", show=True),
-        Binding("b", "go_back", "Back", show=True),
-        Binding("tab", "switch_focus", "Switch", show=True),
-        Binding("q", "quit", "Quit", show=True),
+        Binding("q", "request_quit", "Quit"),
+        Binding("escape", "go_back", "Back", show=False),
+        Binding(
+            "not_a_key",
+            "noop",
+            "nav",
+            key_display="↑↓←→ ↵ esc",
+            group=Binding.Group("navigate"),
+        ),  # Hack
+        Binding("s", "jump", "Search"),
+        Binding("e", "edit_node", "Edit"),
+        Binding("a", "append_node", "Append"),
+        Binding("z", "link_parent", "Link"),
+        Binding("d", "delete", "Delete"),
+        Binding("shift+up", "reorder_up", "Move up", group=Binding.Group("Order")),
+        Binding(
+            "shift+down",
+            "reorder_down",
+            "Move down",
+            key_display="↓",
+            group=Binding.Group("Order"),
+        ),
+        Binding("y", "yank_view", "Copy view"),
+        Binding("f5", "sync", "Sync"),
+        Binding("f2", "toggle_companion", "AI"),
+        Binding("f1", "toggle_help", "Help", show=False),
     ]
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
         super().__init__()
-        self._initial_path = path
-        self._history: list[Path] = []
-        self._reverse_link: bool = False  # True when linking in reverse (adding a parent)
-        vault = path.parent if path else Path("data")
-        self.store = Store(vault)
+        self.vault_path = vault_path
+        self.graph = load_vault(vault_path)
+        self.current_node_id: Optional[str] = None
+        self.history: List[Optional[str]] = []
+        self._last_view: list[ViewRow] = []
+
+    @property
+    def _sync_enabled(self) -> bool:
+        return is_git_repo(self.vault_path) and has_remote(self.vault_path)
+
+    def _header_text(self, sync_status: Optional[str] = None) -> str:
+        base = f"[bold reverse] p f q [/]  vault: {self.vault_path.name}/"
+        if not is_git_repo(self.vault_path):
+            return base + "  [dim]local only[/]"
+        remote = get_remote_name(self.vault_path)
+        if remote is None:
+            git_part = "  [dim]↯ no remote[/]"
+        else:
+            dot = "  [yellow]●[/]" if has_uncommitted_changes(self.vault_path) else ""
+            git_part = f"  [dim]⟳ {remote}[/]{dot}"
+        if sync_status == "ok":
+            status_part = "  [green]✓[/]"
+        elif sync_status == "fail":
+            status_part = "  [red]![/]"
+        else:
+            status_part = ""
+        return base + git_part + status_part
+
+    def _update_header(self, sync_status: Optional[str] = None) -> None:
+        self.query_one("#app-header", Static).update(self._header_text(sync_status))
 
     def compose(self) -> ComposeResult:
-        vault = self._initial_path.parent if self._initial_path else Path("data")
-        yield Horizontal(
-            ContentSwitcher(
-                HomePage(self.store, id="home-page"),
-                SubgraphPane(self.store, id="subgraph"),
-                initial="home-page",
-                id="left-switcher",
-            ),
-            ContentSwitcher(
-                TaskPane(self._initial_path, id="task-pane"),
-                LinkPickerPane(vault, self.store, id="link-picker"),
-                initial="task-pane",
-                id="right-switcher",
-            ),
-            id="panes",
-        )
+        yield Static("", id="app-header")
+        table = DataTable(cursor_type="cell", show_header=True)
+        table.add_column("pulse", key="pulse", width=13)
+        table.add_column("description", key="desc", width=43)
+        table.add_column("when", key="target", width=18)
+        table.add_column("mood", key="comment", width=22)
+        yield table
+        yield Static("  ⬆ why  ·  ⬇ how", id="axis-label")
+        yield CompanionPanel(id="companion")
         yield Footer()
 
     def on_mount(self) -> None:
-        if self._initial_path:
-            self._open_node(self._initial_path)
-        else:
-            self.query_one("#home-page", HomePage).focus()
+        self._show_home()
+        self._update_header()
+        if not self.graph.nodes:
+            self.push_screen(HelpModal())
+        if self._sync_enabled:
+            result = pull(self.vault_path)
+            if result.ok:
+                if "Pulled" in result.message:
+                    self.graph = load_vault(self.vault_path)
+                    self._show_home()
+                    self.notify("Pulled latest changes")
+                self._update_header("ok")
+            else:
+                self.notify(f"Sync: {result.message}", severity="warning")
+                self._update_header("fail")
 
-    # ── Navigation ────────────────────────────────────────────────────────────
+    def _table(self) -> DataTable:
+        return self.query_one(DataTable)
+
+    # ── Views ──────────────────────────────────────────────────────────────────
+
+    def _show_home(self, *, cursor_row: Optional[int] = None) -> None:
+        self.current_node_id = None
+        col = self._table().cursor_coordinate.column
+        rows = build_home_view(self.graph)
+        self._last_view = rows
+        render_to_table(rows, self._table())
+        if cursor_row is not None:
+            self._table().move_cursor(row=min(cursor_row, len(rows) - 1), column=col)
+
+    def _show_node(
+        self,
+        node_id: str,
+        *,
+        cursor_row: Optional[int] = None,
+        cursor_node_id: Optional[str] = None,
+    ) -> None:
+        self.current_node_id = node_id
+        col = self._table().cursor_coordinate.column
+        rows = build_node_view(self.graph, node_id)
+        self._last_view = rows
+        render_to_table(rows, self._table())
+        selected_row = next(i for i, r in enumerate(rows) if r.role == "selected")
+        if cursor_node_id is not None:
+            # try to land on the same node; fall back to previous row position
+            found = next(
+                (
+                    i
+                    for i, r in enumerate(rows)
+                    if r.node and r.node.node_id == cursor_node_id
+                ),
+                None,
+            )
+            target = found if found is not None else min(cursor_row or 0, len(rows) - 1)
+        elif cursor_row is not None:
+            target = min(cursor_row, len(rows) - 1)
+        else:
+            target = selected_row
+        self._table().move_cursor(row=max(0, target), column=col)
+
+    # ── Navigation ─────────────────────────────────────────────────────────────
+
+    def _navigate_to(self, node_id: str) -> None:
+        self.history.append(self.current_node_id)
+        self._show_node(node_id)
+
+    _NON_NODE_KEYS = {"__home__"}
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        row_key = str(event.row_key.value)
+        if row_key not in self._NON_NODE_KEYS:
+            return
+        t = self._table()
+        row = event.cursor_row
+        # skip sentinel (row 0) → go down
+        if row == 0:
+            t.move_cursor(row=1)
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        if not self._table().has_focus:
+            return
+        row_key = str(event.cell_key.row_key.value)
+        if row_key == "__home__":
+            self.action_go_home()
+        elif row_key in self.graph.nodes and row_key != self.current_node_id:
+            self._navigate_to(row_key)
 
     def action_go_home(self) -> None:
-        self._cancel_link()
-        left = self.query_one("#left-switcher", ContentSwitcher)
-        left.current = "home-page"
-        home = self.query_one("#home-page", HomePage)
-        home.refresh_entries()
-        home.focus()
+        if self.current_node_id is not None:
+            self.history.append(self.current_node_id)
+            self._show_home()
 
     def action_go_back(self) -> None:
-        if self._history:
-            path = self._history.pop()
-            self._open_node(path, push_history=False)
-
-    def action_switch_focus(self) -> None:
-        left = self.query_one("#left-switcher", ContentSwitcher)
-        right = self.query_one("#right-switcher", ContentSwitcher)
-        # Determine which side is currently focused
-        focused = self.focused
-        left_ids = {"home-page", "subgraph"}
-        right_ids = {"task-pane", "link-picker"}
-        fid = focused.id if focused else None
-        if fid in left_ids:
-            # Move to right
-            if right.current == "task-pane":
-                self.query_one("#task-pane", TaskPane).focus()
+        if self.history:
+            prev = self.history.pop()
+            if prev is None:
+                self._show_home()
             else:
-                self.query_one("#link-picker", LinkPickerPane).focus()
+                self._show_node(prev)
+
+    # ── Editing ────────────────────────────────────────────────────────────────
+
+    def action_edit_node(self) -> None:
+        t = self._table()
+        cell_key = t.coordinate_to_cell_key(t.cursor_coordinate)
+        row_key = str(cell_key.row_key.value)
+        col_key = str(cell_key.column_key.value)
+        if row_key == "__home__" or row_key not in self.graph.nodes:
+            return
+        if col_key not in FIELDS:
+            return
+        node = self.graph.get_node(row_key)
+        saved_row = t.cursor_coordinate.row
+        if col_key == "pulse":
+            self.push_screen(
+                UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row)
+            )
+        elif col_key == "target":
+            self.push_screen(
+                TargetModal(node), lambda r: self._on_target_done(r, row_key, saved_row)
+            )
         else:
-            # Move to left
-            if left.current == "home-page":
-                self.query_one("#home-page", HomePage).focus()
-            else:
-                self.query_one("#subgraph", SubgraphPane).focus()
+            self.push_screen(
+                EditModal(node, col_key),
+                lambda r: self._on_edit_done(r, row_key, saved_row),
+            )
 
-    def _open_node(
-        self, path: Path, push_history: bool = True, keep_focus: Widget | None = None
+    def _on_edit_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
     ) -> None:
-        """Switch to node state, center subgraph on path, open in task pane.
+        t = self._table()
+        if result is None:
+            t.move_cursor(row=cursor_row)
+            t.focus()
+            return
+        node = self.graph.get_node(row_key)
+        setattr(node, result["attr"], result["value"])
+        save_node_fields(node)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
+        t.focus()
 
-        keep_focus: if set, focus returns to that widget instead of task pane.
+    def _on_target_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
+    ) -> None:
+        t = self._table()
+        if result is None:
+            t.focus()
+            return
+        node = self.graph.get_node(row_key)
+        action = result["action"]
+        if action == "update_target":
+            node.estimated_closing_date = result["estimated_closing_date"]
+        elif action == "close":
+            node.closed_at = result.get("closed_at") or date.today().isoformat()
+            node.close_reason = result.get("reason", "done")
+        elif action == "update_closed_at":
+            if result.get("closed_at"):
+                node.closed_at = result["closed_at"]
+        elif action == "reopen":
+            node.closed_at = None
+            node.close_reason = None
+        save_node_fields(node)
+        from pfq.model import compute_lifecycle
+
+        compute_lifecycle(self.graph)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
+        t.focus()
+
+    def _on_update_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
+    ) -> None:
+        t = self._table()
+        if result is None:
+            t.focus()
+            return
+        node = self.graph.get_node(row_key)
+        node.opened_at = result["opened_at"]
+        node.update_period = result["update_period"]
+        save_node_fields(node)
+        from pfq.model import compute_lifecycle
+
+        compute_lifecycle(self.graph)
+        if self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
+        t.focus()
+
+    # ── Append ─────────────────────────────────────────────────────────────────
+
+    def action_append_node(self) -> None:
+        """Append a new node relative to the cursor.
+
+        Home view: create root (no mode choice).
+        Any node row: child mode puts new node under cursor; sibling mode puts it
+        beside cursor (under cursor's parent, or as a new root if cursor is root).
+        Default mode: child for parent/selected rows, sibling for child rows.
         """
-        pane = self.query_one("#task-pane", TaskPane)
-        if push_history and pane.path and pane.path != path:
-            self._history.append(pane.path)
+        t = self._table()
 
-        # Update task pane
-        data = self.store.get(path) or load_task(path)
-        self.store[path] = data
-        pane.load(path, data)
+        if not t.is_valid_coordinate(t.cursor_coordinate):
+            self.push_screen(CreateModal("", show_mode=False), self._on_create_root)
+            return
 
-        # Switch left to subgraph, center on path
-        left = self.query_one("#left-switcher", ContentSwitcher)
-        left.current = "subgraph"
-        subgraph = self.query_one("#subgraph", SubgraphPane)
-        subgraph.center_on(path)
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        focused_row = next(
+            (r for r in self._last_view if r.node and r.node.node_id == row_key), None
+        )
 
-        # Cancel any pending link picker
-        self._cancel_link()
+        if focused_row is None or row_key not in self.graph.nodes:
+            # No real node under cursor (home sentinel, empty vault, …) → create root
+            self.push_screen(CreateModal("", show_mode=False), self._on_create_root)
+            return
 
-        # Focus
-        if keep_focus is not None:
-            keep_focus.focus()
-        else:
-            pane.focus()
+        cursor_node_id = row_key
+        cursor_label = focused_row.node.description or row_key
 
-    def _preview_node(self, path: Path) -> None:
-        """Load node in task pane read-only; left panel stays centered."""
-        pane = self.query_one("#task-pane", TaskPane)
-        pane.load(path, self.store.get(path) or {})
-        # Do NOT focus task pane — left panel keeps focus
+        # For sibling mode: the parent of the cursor node
+        if focused_row.role == "child":
+            sibling_parent_id = focused_row.visible_parent_id or self.current_node_id
+            default_mode = "sibling"
+        else:  # parent or selected row
+            parents = self.graph.get_parent_ids(cursor_node_id)
+            sibling_parent_id = parents[0] if parents else None  # None → cursor is root
+            default_mode = "child"
 
-    def navigate_to_id(self, link_id: str) -> None:
-        target = self.store.find(link_id)
-        if target:
-            self._open_node(target)
+        def _on_done(result, *, _cursor=cursor_node_id, _sib_parent=sibling_parent_id):
+            self._on_create_child_with_mode(result, _cursor, _sib_parent)
 
-    # ── Linking ───────────────────────────────────────────────────────────────
+        self.push_screen(
+            CreateModal(cursor_label, mode=default_mode),
+            _on_done,
+        )
 
-    def _start_linking(
-        self, section: str, constrain_type: str | None, link_idx: int
+    def _on_create_root(self, result: Optional[dict]) -> None:
+        if not result:
+            return
+        node = create_node(result["description"], self.vault_path)
+        self.graph.add_node(node)
+        self._show_home()
+
+    def _on_create_child_with_mode(
+        self,
+        result: Optional[dict],
+        cursor_node_id: str,
+        sibling_parent_id: Optional[str],
     ) -> None:
-        pane = self.query_one("#task-pane", TaskPane)
-        pane.begin_link(section, constrain_type, link_idx)
-        query = ""
-        if link_idx >= 0:
-            if section == "how":
-                how = get_how(pane.data)
-                if link_idx < len(how):
-                    query = str(how[link_idx].get("description", "") or "")
-            elif section == "constrain":
-                constrain = get_constrain(pane.data)
-                if link_idx < len(constrain):
-                    query = str(constrain[link_idx].get("description", "") or "")
-        scores = self.store.score(query) if query else {}
-        picker = self.query_one("#link-picker", LinkPickerPane)
-        picker.refresh_files(scores=scores or None)
-        picker.cursor = 0
-        picker._searching = False
-        picker._query = ""
-        picker.refresh()
-        self.query_one("#right-switcher", ContentSwitcher).current = "link-picker"
-        picker.focus()
-
-    def _apply_link(self, path: Path) -> None:
-        if self._reverse_link:
-            self._apply_reverse_link(path)
+        """Create a new node as child of cursor, or sibling of cursor (under sibling_parent_id)."""
+        if not result:
             return
-        pane = self.query_one("#task-pane", TaskPane)
-        if not pane.path or pane._link_pending_section is None:
-            self._cancel_link()
+        mode = result.get("mode", "child")
+        node = create_node(result["description"], self.vault_path)
+        self.graph.add_node(node)
+
+        if mode == "child":
+            position = len(self.graph.get_children_ids(cursor_node_id))
+            self.graph.link_child(cursor_node_id, node.node_id, position)
+        else:  # sibling
+            if sibling_parent_id is not None:
+                siblings = self.graph.get_children_ids(sibling_parent_id)
+                position = (
+                    siblings.index(cursor_node_id) + 1
+                    if cursor_node_id in siblings
+                    else len(siblings)
+                )
+                self.graph.link_child(sibling_parent_id, node.node_id, position)
+            # else: cursor is a root → new node is also an unlinked root (no link needed)
+
+        if result.get("close"):
+            node.closed_at = date.today().isoformat()
+            node.close_reason = "done"
+            save_node_fields(node)
+            from pfq.model import compute_lifecycle
+
+            compute_lifecycle(self.graph)
+        save_vault(self.graph)
+        if self.current_node_id is None:
+            self._show_home()
+        else:
+            self._show_node(self.current_node_id)
+
+    # ── Link ───────────────────────────────────────────────────────────────────
+
+    def action_link_parent(self) -> None:
+        if self.current_node_id is None:
+            self.notify("Select a node first to create a link", severity="warning")
             return
-        target_id = get_task_id(path)
-        section = pane._link_pending_section
-        constrain_type = pane._link_pending_type
-        link_idx = pane._link_pending_idx
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key not in self.graph.nodes:
+            return
+        node_label = self.graph.get_node(row_key).description or row_key
+        self.push_screen(
+            NodePickerModal(
+                self.graph,
+                allow_create=True,
+                exclude_id=row_key,
+                show_direction=True,
+                node_label=node_label,
+            ),
+            lambda result: self._on_link_done(result, row_key),
+        )
 
-        if section == "how":
-            how = pane.data.setdefault("how", [])
-            if 0 <= link_idx < len(how):
-                how[link_idx]["target_node"] = target_id
-            else:
-                how.append({"target_node": target_id})
-        elif section == "constrain":
-            constrain = pane.data.setdefault("constrain", [])
-            if 0 <= link_idx < len(constrain):
-                constrain[link_idx]["target_node"] = target_id
-            else:
-                constrain.append({"type": constrain_type, "target_node": target_id})
+    def _on_link_done(self, result: Optional[dict], node_id: str) -> None:
+        if result is None:
+            return
+        direction = result.get("direction", "parent")
+        if result["action"] == "create":
+            other = create_node(result["description"], self.vault_path)
+            self.graph.add_node(other)
+            other_id = other.node_id
+        else:
+            other_id = result["node_id"]
+        if direction == "parent":
+            # node_id becomes child of other_id
+            self.graph.link_child(
+                other_id, node_id, len(self.graph.get_children_ids(other_id))
+            )
+        else:
+            # node_id becomes parent of other_id
+            self.graph.link_child(
+                node_id, other_id, len(self.graph.get_children_ids(node_id))
+            )
+        save_vault(self.graph)
+        self._show_node(self.current_node_id)
 
-        self.store.save(pane.path, pane.data)
-        pane.rows = build_rows(pane.data)
-        pane.rebuild_in_place()
-        pane.clear_link_pending()
-        self._cancel_link()
-        self._refresh_subgraph()
+    # ── Reorder ────────────────────────────────────────────────────────────────
 
-    def _refresh_subgraph(self) -> None:
-        """Re-centre the subgraph on the current node after a data change."""
+    def _action_reorder(self, delta: int) -> None:
+        if self.current_node_id is None:
+            return
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key in (self.current_node_id, "__home__"):
+            return
+        parent_id = next(
+            (
+                r.visible_parent_id
+                for r in self._last_view
+                if r.node and r.node.node_id == row_key and r.role == "child"
+            ),
+            None,
+        )
+        if parent_id is None:
+            return
+        self.graph.reorder_child(parent_id, row_key, delta)
+        save_vault(self.graph)
+        rows = build_node_view(self.graph, self.current_node_id)
+        new_pos = next(
+            (i for i, r in enumerate(rows) if r.node and r.node.node_id == row_key),
+            None,
+        )
+        self._show_node(self.current_node_id, cursor_row=new_pos)
+
+    def action_reorder_up(self) -> None:
+        self._action_reorder(-1)
+
+    def action_reorder_down(self) -> None:
+        self._action_reorder(1)
+
+    # ── Jump ───────────────────────────────────────────────────────────────────
+
+    def action_jump(self) -> None:
+        def _on_jump(result: Optional[dict]) -> None:
+            if result:
+                self._navigate_to(result["node_id"])
+
+        self.push_screen(NodePickerModal(self.graph), _on_jump)
+
+    # ── Yank ───────────────────────────────────────────────────────────────────
+
+    def action_yank_view(self) -> None:
         try:
-            left = self.query_one("#left-switcher", ContentSwitcher)
-            if left.current == "subgraph":
-                pane = self.query_one("#task-pane", TaskPane)
-                if pane.path:
-                    self.query_one("#subgraph", SubgraphPane).center_on(pane.path)
-        except Exception:
-            pass
-
-    def _cancel_link(self) -> None:
-        self._reverse_link = False
-        right = self.query_one("#right-switcher", ContentSwitcher)
-        if right.current == "link-picker":
-            right.current = "task-pane"
-            self.query_one("#task-pane", TaskPane).focus()
-
-    def _start_linking_why(self) -> None:
-        """Open link picker in reverse mode: the picked node becomes the parent."""
-        pane = self.query_one("#task-pane", TaskPane)
-        if not pane.path:
+            import pyperclip
+        except ImportError:
+            self.notify(
+                "pyperclip not installed — run: pip install pyperclip", severity="error"
+            )
             return
-        self._reverse_link = True
-        query = str(pane.data.get("description", "") or "")
-        scores = self.store.score(query) if query else {}
-        picker = self.query_one("#link-picker", LinkPickerPane)
-        picker.refresh_files(scores=scores or None)
-        picker.cursor = 0
-        picker._searching = False
-        picker._query = ""
-        picker.refresh()
-        self.query_one("#right-switcher", ContentSwitcher).current = "link-picker"
-        picker.focus()
-
-    def _apply_reverse_link(self, parent_path: Path) -> None:
-        """Add current node as a how-child of parent_path."""
-        pane = self.query_one("#task-pane", TaskPane)
-        if not pane.path:
-            self._cancel_link()
-            return
-        child_id = get_task_id(pane.path)
-        parent_data = self.store.get(parent_path) or load_task(parent_path)
-        how = parent_data.setdefault("how", [])
-        # Avoid duplicates
-        existing = {(e.get("target_node") or "").upper() for e in how}
-        if child_id.upper() not in existing:
-            how.append({"target_node": child_id})
-            self.store.save(parent_path, parent_data)
-        # Rebuild why rows for current node
-        pane.rows = build_rows(pane.data)
-        pane.rebuild_in_place()
-        self._cancel_link()
-        # Refresh subgraph to show new parent
+        text = render_to_text(self._last_view)
         try:
-            self.query_one("#subgraph", SubgraphPane).center_on(pane.path)  # type: ignore[attr-defined]
-        except Exception:
-            pass
+            pyperclip.copy(text)
+            self.notify("View copied to clipboard")
+        except pyperclip.PyperclipException:
+            self.notify(
+                "Clipboard not available — install xclip or xsel (Linux)",
+                severity="error",
+            )
 
-    def _create_and_link(self) -> None:
-        if self._reverse_link:
-            self.push_screen(NewTaskModal(""), self._on_new_parent_for_link)
+    # ── Companion ──────────────────────────────────────────────────────────────
+
+    def action_toggle_help(self) -> None:
+        self.push_screen(HelpModal())
+
+    def action_toggle_companion(self) -> None:
+        panel = self.query_one("#companion", CompanionPanel)
+        panel.toggle_class("visible")
+        if panel.has_class("visible"):
+            panel.start_thinking()
+        else:
+            panel.stop_thinking()
+
+    # ── Delete ─────────────────────────────────────────────────────────────────
+
+    def action_delete(self) -> None:
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key == "__home__" or row_key not in self.graph.nodes:
             return
-        pane = self.query_one("#task-pane", TaskPane)
-        default = ""
-        section = pane._link_pending_section
-        link_idx = pane._link_pending_idx
-        if link_idx >= 0 and section:
-            if section == "how":
-                how = get_how(pane.data)
-                if link_idx < len(how):
-                    default = str(how[link_idx].get("description", "") or "")
-            elif section == "constrain":
-                constrain = get_constrain(pane.data)
-                if link_idx < len(constrain):
-                    default = str(constrain[link_idx].get("description", "") or "")
-        self.push_screen(NewTaskModal(default), self._on_new_task_for_link)
 
-    def _create_node(self, description: str, node_type: str = "task") -> Path:
-        """Create, populate, and persist a new node; return its path."""
-        path, data = self.store.new_node(description)
-        data.update(
+        focused_row = next(
+            (r for r in self._last_view if r.node and r.node.node_id == row_key), None
+        )
+        if focused_row is None:
+            return
+
+        if focused_row.role == "sentinel":
+            return
+
+        node = self.graph.get_node(row_key)
+        node_label = node.description or row_key
+
+        # unlink_pair: (parent_id, child_id) of the link to cut, or None
+        if focused_row.role == "child" and focused_row.visible_parent_id:
+            unlink_pair = (focused_row.visible_parent_id, row_key)
+        elif focused_row.role == "parent" and self.current_node_id:
+            unlink_pair = (row_key, self.current_node_id)
+        else:
+            unlink_pair = None
+
+        saved_cursor_row = self._table().cursor_coordinate.row
+
+        options = self._build_delete_options(row_key, unlink_pair)
+        self.push_screen(
+            DeleteModal(node_label, options),
+            lambda result: self._on_delete_done(
+                result, row_key, unlink_pair, saved_cursor_row
+            ),
+        )
+
+    def _build_delete_options(self, node_id: str, unlink_pair: Optional[tuple]) -> list:
+        options = []
+
+        if unlink_pair is not None:
+            parent_id, child_id = unlink_pair
+            other_id = child_id if child_id != node_id else parent_id
+            other_label = self.graph.get_node(other_id).description or other_id
+            options.append(
+                {
+                    "key": "unlink",
+                    "label": f'Unlink from "{other_label}"',
+                    "detail": "Both nodes stay — only this link is removed.",
+                    "nodes": [],
+                }
+            )
+
+        orphans = [
+            self.graph.get_node(nid).description or nid
+            for nid in self.graph.get_children_ids(node_id)
+            if len(self.graph.get_parent_ids(nid)) == 1
+        ]
+        orphan_note = (
+            f"{len(orphans)} {'child' if len(orphans) == 1 else 'children'} will become unanchored."
+            if orphans
+            else "No other nodes affected."
+        )
+        options.append(
             {
-                "description": description,
-                "type": node_type,
-                "status": "todo",
-                "start_date": date.today().isoformat(),
+                "key": "node",
+                "label": "Delete node",
+                "detail": orphan_note,
+                "nodes": [],
             }
         )
-        self.store.save(path, data)
-        return path
 
-    def _on_new_task_for_link(self, description: str | None) -> None:
-        if not description:
-            return
-        self._apply_link(self._create_node(description))
+        soft_set = self.graph.deletion_set(node_id, "soft")
+        if len(soft_set) > 1:
+            soft_nodes = [
+                self.graph.get_node(nid).description or nid
+                for nid in soft_set
+                if nid != node_id
+            ]
+            options.append(
+                {
+                    "key": "soft",
+                    "label": f"Delete + remove unanchored  ({len(soft_set)} nodes)",
+                    "detail": "Also removes nodes that would lose all paths to a root.",
+                    "nodes": soft_nodes,
+                }
+            )
 
-    def _on_new_parent_for_link(self, description: str | None) -> None:
-        if not description:
-            self._cancel_link()
+        hard_set = self.graph.deletion_set(node_id, "hard")
+        if len(hard_set) > 1:
+            hard_nodes = [
+                self.graph.get_node(nid).description or nid
+                for nid in hard_set
+                if nid != node_id
+            ]
+            options.append(
+                {
+                    "key": "hard",
+                    "label": f"Delete subtree  ({len(hard_set)} nodes)",
+                    "detail": "Removes all descendants regardless of other parents.",
+                    "nodes": hard_nodes,
+                }
+            )
+
+        return options
+
+    def _on_delete_done(
+        self,
+        result: Optional[str],
+        node_id: str,
+        unlink_pair: Optional[tuple],
+        cursor_row: int,
+    ) -> None:
+        if result is None:
             return
-        self._apply_reverse_link(self._create_node(description, "goal"))
+
+        if result == "unlink":
+            if unlink_pair is None:
+                return
+            parent_id, child_id = unlink_pair
+            self.graph.unlink_child(parent_id, child_id)
+            save_vault(self.graph)
+            # node stays in graph — seek it by id; cursor_row is the fallback
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=node_id
+            )
+            return
+
+        if result == "node":
+            self._delete_nodes({node_id}, cursor_row)
+            return
+
+        if result in ("soft", "hard"):
+            self._delete_nodes(self.graph.deletion_set(node_id, result), cursor_row)
+            return
+
+    # ── Sync ───────────────────────────────────────────────────────────────────
+
+    def action_request_quit(self) -> None:
+        if not self._sync_enabled:
+            self.exit()
+            return
+        has_changes = has_uncommitted_changes(self.vault_path)
+        self.push_screen(SyncModal(has_changes), self._on_sync_quit_done)
+
+    def _on_sync_quit_done(self, result: Optional[str]) -> None:
+        if result is None:
+            return  # cancelled
+        if result == "sync_quit":
+            sync_result = commit_and_push(self.vault_path)
+            if not sync_result.ok:
+                self.notify(f"Sync failed: {sync_result.message}", severity="warning")
+                self._update_header("fail")
+                return  # stay in app so user sees the error
+        self.exit()
+
+    def action_sync(self) -> None:
+        if not self._sync_enabled:
+            self.notify("No git remote configured for this vault", severity="warning")
+            return
+        result = commit_and_push(self.vault_path)
+        if result.ok:
+            self.notify(result.message)
+            self._update_header("ok")
+        else:
+            self.notify(f"Sync failed: {result.message}", severity="warning")
+            self._update_header("fail")
+
+    def _delete_nodes(self, node_ids: set, cursor_row: int = 0) -> None:
+        navigating_away = self.current_node_id in node_ids
+        for nid in node_ids:
+            node = self.graph.get_node(nid)
+            self.graph.remove_node(nid)
+            delete_node_file(node)
+        save_vault(self.graph)
+        if navigating_away:
+            prev = next(
+                (
+                    p
+                    for p in reversed(self.history)
+                    if p is not None and p not in node_ids
+                ),
+                None,
+            )
+            self.history = [p for p in self.history if p not in node_ids]
+            if prev and prev in self.graph.nodes:
+                self._show_node(prev)
+            else:
+                self._show_home()
+        elif self.current_node_id is None:
+            self._show_home(cursor_row=cursor_row)
+        else:
+            self._show_node(self.current_node_id, cursor_row=cursor_row)

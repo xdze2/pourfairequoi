@@ -1,0 +1,10 @@
+description: Polish features as much as possible
+how:
+- target_node: VYP3FB_clean_mouse_interaction_or_remove
+- target_node: C4YI0C_app_header
+- target_node: NW9I4N_nav_history_crumb_bar_esc
+- target_node: HI5XM2_colors
+- target_node: W8V5MP_improve_ux_nav
+- target_node: FYCV1H_write_design_key_principles
+- target_node: G1HP8M_status_remove_type_add_movement
+- target_node: Q70TC5_col_names_pulse_what_when_mood

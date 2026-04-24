@@ -1,0 +1,8 @@
+description: Clean code
+how:
+- target_node: S0JWHD_fix_node_editing
+- target_node: 5CN8GT_tests_on_various_env
+- target_node: 02485O_full_tests_coverage
+- target_node: RHYDAP_fix_tests
+- target_node: XSDBJZ_screenshots
+status: someday

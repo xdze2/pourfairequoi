@@ -1,349 +1,254 @@
-from __future__ import annotations
-
-import os
-import random
-import re
-import string
-from pathlib import Path
-
-import yaml
-
-_VAULT = Path("data")
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import List, NamedTuple, Optional
 
 
-# ── Low-level file I/O (private helpers) ─────────────────────────────────────
-
-
-def _generate_id(length: int = 6) -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
-
-
-def _slugify(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^\w]+", "_", text)
-    return text.strip("_")[:40]
-
-
-def _new_filepath(description: str, vault: Path) -> Path:
-    vault.mkdir(parents=True, exist_ok=True)
-    return vault / f"{_generate_id()}_{_slugify(description)}.yaml"
-
-
-def load_task(path: Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def save_task(path: Path, data: dict) -> None:
-    from datetime import date
-    data["last_modified"] = date.today().isoformat()
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        yaml.dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
-    os.replace(tmp, path)
-
-
-def get_task_id(path: Path) -> str:
-    """Return the ID prefix of a task filename (e.g. 'M11AB' from 'M11AB_slug.yaml')."""
-    return path.stem.split("_")[0]
-
-
-def find_path_by_id(task_id: str, store) -> Path | None:
-    """Return the path whose filename starts with task_id (works with Store or dict)."""
-    task_id_upper = task_id.upper()
-    for p in store:
-        if p.stem.upper().startswith(task_id_upper):
-            return p
+def _fuzzy_score(query: str, target: str) -> Optional[int]:
+    if not query:
+        return 0
+    qi = 0
+    score = 0
+    consecutive = 0
+    for ch in target:
+        if ch == query[qi]:
+            consecutive += 1
+            score += consecutive
+            qi += 1
+            if qi == len(query):
+                return score * 1000 - len(target)
+        else:
+            consecutive = 0
     return None
 
 
-# ── Section accessors (pure, work on plain dicts) ─────────────────────────────
+class Link(NamedTuple):
+    parent_id: str
+    child_id: str
 
 
-def get_how(data: dict) -> list[dict]:
-    """Return the how list. Each entry is either:
-      {"target_node": ID}                 — file node reference
-      {"type": ..., "description": ...}   — in-file node (inline)
-    """
-    how = data.get("how")
-    if isinstance(how, list):
-        return how
-    return []
+@dataclass
+class Node:
+    node_id: str
+    description: str = None
+    opened_at: str = None               # ISO date, user-set (can be past or future)
+    closed_at: str = None               # ISO date, set on closing
+    close_reason: str = None            # "done" | "discarded" | None
+    estimated_closing_date: str = None  # ISO date | None
+    update_period: int = None           # days | None (None = no tracking)
+    comment: str = None
+    filepath: str = None
+    # computed by compute_lifecycle — never stored
+    _last_active: date = field(default=None, repr=False)
+    _last_update: date = field(default=None, repr=False)
+    _is_active: bool = field(default=None, repr=False)
+    _is_overdue: bool = field(default=None, repr=False)
+
+    @property
+    def is_closed(self) -> bool:
+        return self.closed_at is not None
 
 
-def get_constrain(data: dict) -> list[dict]:
-    """Return the constrain list."""
-    constrain = data.get("constrain")
-    if isinstance(constrain, list):
-        return constrain
-    return []
+class NodeGraph:
+    def __init__(self):
+        self.nodes: dict[str, Node] = {}
+        self.links: set[Link] = set()
+        self._child_order: dict[str, list[str]] = {}
 
+    def get_node(self, node_id: str) -> Node:
+        return self.nodes[node_id]
 
-# ── Store ─────────────────────────────────────────────────────────────────────
+    def get_parent_ids(self, node_id: str) -> List[str]:
+        """Return the IDs of all direct parents of node_id."""
+        return [lnk.parent_id for lnk in self.links if lnk.child_id == node_id]
 
+    def get_children_ids(self, node_id: str) -> List[str]:
+        """Return the IDs of all direct children of node_id, in insertion order."""
+        return self._child_order.get(node_id, [])
 
-class Store:
-    """In-memory cache of all YAML nodes in a vault, with graph query methods.
+    def add_node(self, node: "Node") -> None:
+        self.nodes[node.node_id] = node
 
-    Supports dict-like read access so widgets can use store[path], store.get(),
-    store.items(), etc. without needing to know about the class.
-    """
+    def link_child(self, parent_id: str, child_id: str, position: int) -> None:
+        self.links.add(Link(parent_id, child_id))
+        order = self._child_order.setdefault(parent_id, [])
+        if child_id not in order:
+            order.insert(position, child_id)
 
-    def __init__(self, vault: Path = _VAULT) -> None:
-        self.vault = vault
-        self._data: dict[Path, dict] = {}
-        if vault.exists():
-            for p in sorted(vault.iterdir()):
-                if p.suffix in (".yaml", ".yml"):
-                    try:
-                        self._data[p] = load_task(p)
-                    except Exception:
-                        self._data[p] = {}
+    def reorder_child(self, parent_id: str, child_id: str, delta: int) -> None:
+        order = self._child_order.get(parent_id)
+        if not order or child_id not in order:
+            return
+        i = order.index(child_id)
+        j = i + delta
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
 
-    # ── Dict-like interface ───────────────────────────────────────────────────
+    def unlink_child(self, parent_id: str, child_id: str) -> None:
+        self.links.discard(Link(parent_id, child_id))
+        if parent_id in self._child_order:
+            self._child_order[parent_id] = [
+                c for c in self._child_order[parent_id] if c != child_id
+            ]
 
-    def __getitem__(self, path: Path) -> dict:
-        return self._data[path]
+    def remove_node(self, node_id: str) -> None:
+        if node_id not in self.nodes:
+            return
+        self.links = {lnk for lnk in self.links if lnk.parent_id != node_id and lnk.child_id != node_id}
+        for order in self._child_order.values():
+            if node_id in order:
+                order.remove(node_id)
+        self._child_order.pop(node_id, None)
+        del self.nodes[node_id]
 
-    def __setitem__(self, path: Path, data: dict) -> None:
-        self._data[path] = data
+    def get_roots(self) -> List[str]:
+        children = {lnk.child_id for lnk in self.links}
+        return [nid for nid in self.nodes if nid not in children]
 
-    def __contains__(self, path: object) -> bool:
-        return path in self._data
-
-    def __iter__(self):
-        return iter(self._data)
-
-    def __len__(self) -> int:
-        return len(self._data)
-
-    def get(self, path: Path, default: dict | None = None) -> dict | None:
-        return self._data.get(path, default)
-
-    def keys(self):
-        return self._data.keys()
-
-    def items(self):
-        return self._data.items()
-
-    # ── Node lifecycle ────────────────────────────────────────────────────────
-
-    def new_node(self, description: str) -> tuple[Path, dict]:
-        """Create a new YAML file, register it in the store, return (path, data)."""
-        path = _new_filepath(description, self.vault)
-        data: dict = {}
-        self._data[path] = data
-        return path, data
-
-    def save(self, path: Path, data: dict) -> None:
-        """Persist data to disk and keep the store in sync."""
-        save_task(path, data)
-        self._data[path] = data
-
-    def remove(self, path: Path) -> None:
-        """Delete the file from disk and from the store."""
-        path.unlink(missing_ok=True)
-        self._data.pop(path, None)
-
-    # ── Graph queries ─────────────────────────────────────────────────────────
-
-    def find(self, task_id: str) -> Path | None:
-        """Return the path whose filename starts with task_id (case-insensitive)."""
-        task_id_upper = task_id.upper()
-        for p in self._data:
-            if p.stem.upper().startswith(task_id_upper):
-                return p
-        return None
-
-    def sort(self) -> list[tuple[Path, int]]:
-        """Order all nodes from most abstract (roots) to most concrete (leaves).
-
-        Returns list of (path, display_indent).
-        Roots = nodes not referenced as a how child by any other node.
-        Indentation formula: 0 if root, else max(1, depth - max(0, in_degree - 1))
-        """
-        id_to_path: dict[str, Path] = {get_task_id(p): p for p in self._data}
-
-        how_children: dict[Path, list[Path]] = {p: [] for p in self._data}
-        in_degree: dict[Path, int] = {p: 0 for p in self._data}
-        has_parent: set[Path] = set()
-
-        for path, data in self._data.items():
-            for entry in get_how(data):
-                target_id = (entry.get("target_node") or "").upper()
-                if not target_id:
-                    continue
-                target_path = id_to_path.get(target_id)
-                if target_path and target_path != path:
-                    how_children[path].append(target_path)
-                    in_degree[target_path] = in_degree.get(target_path, 0) + 1
-                    has_parent.add(target_path)
-
-        roots = sorted(p for p in self._data if p not in has_parent)
-
-        visited: dict[Path, int] = {}
-        queue: list[tuple[Path, int]] = []
-        for p in roots:
-            visited[p] = 0
-            queue.append((p, 0))
-
-        head = 0
-        while head < len(queue):
-            current_path, current_depth = queue[head]
-            head += 1
-            for child in how_children.get(current_path, []):
-                if child not in visited:
-                    visited[child] = current_depth + 1
-                    queue.append((child, current_depth + 1))
-
-        result: list[tuple[Path, int]] = []
-        for path, depth in queue:
-            deg = in_degree.get(path, 0)
-            display_indent = 0 if deg == 0 else max(1, depth - max(0, deg - 1))
-            result.append((path, display_indent))
-
-        for p in sorted(self._data):
-            if p not in visited:
-                result.append((p, 0))
-
-        return result
-
-    def traverse(self, start_path: Path, direction: str) -> list[dict]:
-        """BFS traversal from start_path.
-
-        direction="down": follow how → target_node entries declared in each node.
-        direction="up":   find nodes that declare start_path as a how child.
-
-        Returns list of node dicts: path, data, description, status, depth,
-        in_degree, display_indent.
-        """
-        id_to_path: dict[str, Path] = {get_task_id(p): p for p in self._data}
-
-        def how_file_children(path: Path) -> list[Path]:
-            result = []
-            for entry in get_how(self._data.get(path, {})):
-                tid = (entry.get("target_node") or "").upper()
-                if tid:
-                    tp = id_to_path.get(tid)
-                    if tp and tp != path:
-                        result.append(tp)
-            return result
-
-        def how_parents(path: Path) -> list[Path]:
-            path_id = get_task_id(path).upper()
-            result = []
-            for p, data in self._data.items():
-                if p == path:
-                    continue
-                for entry in get_how(data):
-                    if (entry.get("target_node") or "").upper() == path_id:
-                        result.append(p)
-                        break
-            return result
-
-        neighbors = how_file_children if direction == "down" else how_parents
-
-        visited: dict[Path, int] = {}
-        in_degree: dict[Path, int] = {}
-        queue: list[tuple[Path, int]] = []
-
-        for neighbor in neighbors(start_path):
-            if neighbor == start_path:
+    def _dfs_tree(self, node_id: str, neighbors_fn, max_depth: int) -> List[tuple["Node", int]]:
+        result, visited = [], {node_id}
+        stack = [(nid, 1) for nid in reversed(neighbors_fn(node_id))]
+        while stack:
+            current_id, depth = stack.pop()
+            if current_id in visited or current_id not in self.nodes:
                 continue
-            in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
-            if neighbor not in visited:
-                visited[neighbor] = 1
-                queue.append((neighbor, 1))
-
-        head = 0
-        while head < len(queue):
-            current_path, current_depth = queue[head]
-            head += 1
-            for neighbor in neighbors(current_path):
-                if neighbor == start_path:
-                    continue
-                in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
-                if neighbor not in visited:
-                    visited[neighbor] = current_depth + 1
-                    queue.append((neighbor, current_depth + 1))
-
-        result: list[dict] = []
-        for path, depth in visited.items():
-            deg = in_degree.get(path, 1)
-            data = self._data.get(path, {})
-            display_indent = max(1, depth - (deg - 1))
-            result.append({
-                "path": path, "data": data,
-                "description": str(data.get("description", "") or get_task_id(path)),
-                "status": str(data.get("status", "") or ""),
-                "depth": depth, "in_degree": deg, "display_indent": display_indent,
-            })
-
-        result.sort(key=lambda n: (n["display_indent"], -n["in_degree"], n["depth"]))
+            visited.add(current_id)
+            result.append((self.nodes[current_id], depth))
+            if depth < max_depth:
+                stack += [
+                    (nid, depth + 1)
+                    for nid in reversed(neighbors_fn(current_id))
+                    if nid not in visited
+                ]
         return result
 
-    def score(self, query: str) -> dict[Path, float]:
-        """Score each node by word overlap with query (Jaccard similarity)."""
-        _STOP = {"a", "an", "the", "to", "of", "and", "or", "in", "for", "is", "it"}
+    def search_nodes(self, query: str) -> List["Node"]:
+        """Return nodes whose description matches query, ranked by fuzzy score.
 
-        def tokenize(text: str) -> set[str]:
-            words = re.sub(r"[^\w]+", " ", text.lower()).split()
-            return {w for w in words if w not in _STOP and len(w) > 1}
+        Uses subsequence matching with consecutive-run bonus (no external deps).
+        Nodes with no description are excluded.
+        """
+        q = query.lower()
+        scored: list[tuple[int, Node]] = []
+        for node in self.nodes.values():
+            desc = node.description or ""
+            score = _fuzzy_score(q, desc.lower())
+            if score is not None:
+                scored.append((score, node))
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [node for _, node in scored]
 
-        query_words = tokenize(query)
-        if not query_words:
-            return {p: 0.0 for p in self._data}
+    def get_parents_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+        return self._dfs_tree(node_id, self.get_parent_ids, max_depth)
 
-        scores: dict[Path, float] = {}
-        for path, data in self._data.items():
-            desc = str(data.get("description", "") or "")
-            task_words = tokenize(desc)
-            overlap = len(query_words & task_words)
-            union = len(query_words | task_words)
-            scores[path] = overlap / union if union else 0.0
-        return scores
+    def get_childrens_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+        return self._dfs_tree(node_id, self.get_children_ids, max_depth)
+
+    def nodes_unanchored_after_removal(self, node_ids: set) -> set:
+        remaining = set(self.nodes.keys()) - node_ids
+        reachable: set[str] = set()
+        queue = [nid for nid in remaining if not self.get_parent_ids(nid)]
+        while queue:
+            nid = queue.pop()
+            if nid in reachable:
+                continue
+            reachable.add(nid)
+            queue.extend(
+                lnk.child_id for lnk in self.links
+                if lnk.parent_id == nid and lnk.child_id in remaining
+            )
+        return remaining - reachable
+
+    def deletion_set(self, node_id: str, mode: str) -> set:
+        """Compute the set of node_ids to delete for a given mode.
+
+        mode "node" : only the node itself
+        mode "soft" : node + whatever becomes unanchored after its removal
+        mode "hard" : node + all descendants (full DFS, ignoring other parents)
+        """
+        if mode == "node":
+            return {node_id}
+        if mode == "soft":
+            to_delete = {node_id}
+            while True:
+                unanchored = self.nodes_unanchored_after_removal(to_delete)
+                new_set = to_delete | unanchored
+                if new_set == to_delete:
+                    break
+                to_delete = new_set
+            return to_delete
+        if mode == "hard":
+            result = {node_id}
+            stack = list(self.get_children_ids(node_id))
+            while stack:
+                nid = stack.pop()
+                if nid in result:
+                    continue
+                result.add(nid)
+                stack.extend(self.get_children_ids(nid))
+            return result
+        raise ValueError(f"Unknown mode: {mode}")
 
 
-# ── Migration utility ─────────────────────────────────────────────────────────
+def compute_lifecycle(graph: NodeGraph, today: date = None) -> None:
+    """Compute _last_active, _last_update, _is_active, _is_overdue for all nodes.
 
+    Processes leaves first (bottom-up topological order) so each node can
+    aggregate its children's already-computed values.
+    """
+    if today is None:
+        today = date.today()
 
-def migrate_task(data: dict) -> dict:
-    """Convert old-format tasks (links: list) to new how:/constrain: format."""
-    from .config import CONSTRAIN_TYPE_MAP
+    # Kahn's algorithm starting from leaves (out_degree == 0)
+    pending = {nid: len(graph.get_children_ids(nid)) for nid in graph.nodes}
+    queue = [nid for nid, d in pending.items() if d == 0]
+    order = []
+    while queue:
+        nid = queue.pop(0)
+        order.append(nid)
+        for pid in graph.get_parent_ids(nid):
+            pending[pid] -= 1
+            if pending[pid] == 0:
+                queue.append(pid)
 
-    old_links = data.pop("links", None)
-    if not isinstance(old_links, list):
-        return data
+    for nid in order:
+        node = graph.nodes[nid]
 
-    how: list[dict] = list(data.get("how") or [])
-    constrain: list[dict] = list(data.get("constrain") or [])
+        # _last_active: max close_timestamp of closed direct children
+        # + _last_active of all children (propagated from below)
+        candidates = []
+        for cid in graph.get_children_ids(nid):
+            child = graph.nodes[cid]
+            if child.closed_at:
+                candidates.append(date.fromisoformat(child.closed_at))
+            if child._last_active is not None:
+                candidates.append(child._last_active)
+        node._last_active = max(candidates) if candidates else None
 
-    for link in old_links:
-        ltype = link.get("type", "")
-        desc = link.get("description", "")
-        target = link.get("target_node")
+        # _is_overdue
+        if node.estimated_closing_date:
+            node._is_overdue = today > date.fromisoformat(node.estimated_closing_date)
+        else:
+            node._is_overdue = None
 
-        if ltype == "how":
-            entry: dict = {}
-            if target:
-                entry["target_node"] = target
-            if desc:
-                entry["description"] = desc
-            if entry:
-                how.append(entry)
-        elif ltype == "why":
-            pass
-        elif ltype in CONSTRAIN_TYPE_MAP or ltype in ("need", "required_by", "or"):
-            mapped = "alternative_to" if ltype == "or" else ltype
-            entry = {"type": mapped}
-            if desc:
-                entry["description"] = desc
-            if target:
-                entry["target_node"] = target
-            constrain.append(entry)
-
-    if how:
-        data["how"] = how
-    if constrain:
-        data["constrain"] = constrain
-    return data
+        # _last_update and _is_active
+        if node.update_period is None or node.opened_at is None:
+            node._last_update = None
+            node._is_active = None
+        else:
+            opened = date.fromisoformat(node.opened_at)
+            if today < opened:
+                # future opened_at — dormant until that date
+                node._last_update = None
+                node._is_active = None
+            else:
+                elapsed = (today - opened).days
+                periods = elapsed // node.update_period
+                node._last_update = opened + timedelta(days=periods * node.update_period)
+                if periods == 0:
+                    # still within the first period — no check-in due yet
+                    node._is_active = None
+                else:
+                    node._is_active = (
+                        node._last_active is not None
+                        and node._last_active >= node._last_update
+                    )

@@ -1,0 +1,6 @@
+description: Fix bike
+opened_at: '2026-01-01'
+estimated_closing_date: '2026-01-01'
+how:
+- target_node: BB0002_buy_inner_tube
+- target_node: BB0003_check_brakes

@@ -1,0 +1,8 @@
+description: node comment field
+how:
+- target_node: 0G2NG6_related_to_mood_feel
+- target_node: 7EB596_decouple_status_prio_sentiment
+timeline:
+- date: today
+  text: test
+  type: journal

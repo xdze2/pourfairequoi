@@ -1,0 +1,7 @@
+description: Learn guitar
+opened_at: '2026-01-01'
+update_period: 30
+how:
+- target_node: AB0002_practice_chords
+- target_node: AB0003_get_a_guitar
+- target_node: GB0001_teach_guitar_on_weekends

@@ -1,5 +1,6 @@
 data/
-
+*vault*
+!project_vault
 
 node_modules
 .DS_Store
@@ -27,6 +28,8 @@ build/
 secret.yaml
 token.txt
 token.secret.txt
+
+todo.md
 
 # Editors
 .idea/
