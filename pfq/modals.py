@@ -1,4 +1,5 @@
 """Modal screens for pfq."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -18,28 +19,40 @@ from pfq.model import Node, NodeGraph
 # ── Help ───────────────────────────────────────────────────────────────────────
 
 _HELP_BINDINGS = [
-    ("navigate", [
-        ("Enter / click", "Open node"),
-        ("h",             "Home"),
-        ("Escape",        "Back"),
-        ("s",             "Search / jump"),
-    ]),
-    ("edit", [
-        ("a",             "Append node (child or sibling)"),
-        ("e",             "Edit focused cell"),
-        ("z",             "Link to parent"),
-        ("d",             "Delete / unlink"),
-        ("Shift+↑ / ↓",  "Reorder sibling"),
-    ]),
-    ("view", [
-        ("y",             "Copy view to clipboard"),
-        ("f2",            "Toggle AI companion"),
-        ("F1",            "Toggle this help"),
-    ]),
-    ("app", [
-        ("f5",            "Sync vault (git push/pull)"),
-        ("q",             "Quit"),
-    ]),
+    (
+        "navigate",
+        [
+            ("Enter / click", "Open node"),
+            ("h", "Home"),
+            ("Escape", "Back"),
+            ("s", "Search / jump"),
+        ],
+    ),
+    (
+        "edit",
+        [
+            ("a", "Append node (child or sibling)"),
+            ("e", "Edit focused cell"),
+            ("z", "Link to parent"),
+            ("d", "Delete / unlink"),
+            ("Shift+↑ / ↓", "Reorder sibling"),
+        ],
+    ),
+    (
+        "view",
+        [
+            ("y", "Copy view to clipboard"),
+            ("f2", "Toggle AI companion"),
+            ("F1", "Toggle this help"),
+        ],
+    ),
+    (
+        "app",
+        [
+            ("f5", "Sync vault (git push/pull)"),
+            ("q", "Quit"),
+        ],
+    ),
 ]
 
 
@@ -93,8 +106,8 @@ class HelpModal(ModalScreen):
     """
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
-        Binding("enter",  "dismiss", "Close"),
-        Binding("f1",     "dismiss", "Close"),
+        Binding("enter", "dismiss", "Close"),
+        Binding("f1", "dismiss", "Close"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -105,9 +118,10 @@ class HelpModal(ModalScreen):
                     yield Label(section, classes="section-header")
                     for key, desc in pairs:
                         with Horizontal(classes="binding-row"):
-                            yield Label(key,  classes="key-col")
+                            yield Label(key, classes="key-col")
                             yield Label(desc, classes="desc-col")
                 yield Label("F1 to close", id="hint")
+
 
 # Shared CSS for the title-bar modal pattern
 _MODAL_BASE_CSS = """
@@ -165,8 +179,14 @@ class _Toggle(Widget, can_focus=True):
             super().__init__()
             self.toggle = toggle
 
-    def __init__(self, label_on: str, label_off: str = "", value: bool = True,
-                 radio: bool = False, widget_id: str | None = None):
+    def __init__(
+        self,
+        label_on: str,
+        label_off: str = "",
+        value: bool = True,
+        radio: bool = False,
+        widget_id: str | None = None,
+    ):
         super().__init__(id=widget_id)
         self.label_on = label_on
         self.label_off = label_off or label_on
@@ -215,7 +235,9 @@ class CreateModal(ModalScreen):
     Esc        cancel
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="CreateModal") + """
+    CSS = (
+        _MODAL_BASE_CSS.format(cls="CreateModal")
+        + """
     CreateModal #dialog { width: 56; }
     CreateModal _Toggle { margin-top: 1; }
     CreateModal #preview {
@@ -225,6 +247,7 @@ class CreateModal(ModalScreen):
     }
     CreateModal #hint { margin-top: 1; }
     """
+    )
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("enter", "confirm", "Confirm", priority=True),
@@ -243,18 +266,23 @@ class CreateModal(ModalScreen):
                 yield Input(placeholder="Description…", id="widget")
                 if self._show_mode:
                     yield _Toggle(
-                        label_on="child", label_off="sibling",
+                        label_on="child",
+                        label_off="sibling",
                         value=(self._default_mode == "child"),
-                        radio=True, widget_id="t-mode",
+                        radio=True,
+                        widget_id="t-mode",
                     )
                 yield _Toggle(
-                    label_on="close immediately", label_off="close immediately",
-                    value=False, widget_id="t-close",
+                    label_on="close immediately",
+                    label_off="close immediately",
+                    value=False,
+                    widget_id="t-close",
                 )
                 yield Static("", id="preview", markup=True)
                 yield Static(
                     "[dim]Tab ↑↓  navigate   Space  toggle   Enter  confirm   Esc  cancel[/]",
-                    id="hint", markup=True,
+                    id="hint",
+                    markup=True,
                 )
 
     def on_mount(self) -> None:
@@ -316,11 +344,13 @@ class CreateModal(ModalScreen):
     def action_confirm(self) -> None:
         value = self.query_one("#widget", Input).value.strip()
         if value:
-            self.dismiss({
-                "description": value,
-                "mode": self._mode(),
-                "close": self.query_one("#t-close", _Toggle).value,
-            })
+            self.dismiss(
+                {
+                    "description": value,
+                    "mode": self._mode(),
+                    "close": self.query_one("#t-close", _Toggle).value,
+                }
+            )
         else:
             self.app.bell()
 
@@ -443,7 +473,9 @@ class DeleteModal(ModalScreen):
             with Vertical(id="dialog-body"):
                 for i, opt in enumerate(self.options):
                     with Vertical(classes="option", id=f"opt-{i}"):
-                        yield Static(opt["label"], id=f"opt-label-{i}", classes="option-label")
+                        yield Static(
+                            opt["label"], id=f"opt-label-{i}", classes="option-label"
+                        )
                         yield Static(opt["detail"], classes="option-detail")
                         if opt.get("nodes"):
                             preview = opt["nodes"][:5]
@@ -452,7 +484,11 @@ class DeleteModal(ModalScreen):
                             if extra:
                                 lines += f"\n  … and {extra} more"
                             yield Static(lines, classes="option-nodes")
-                yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
+                yield Static(
+                    "[dim]↑↓ select   Enter confirm   Esc cancel[/]",
+                    id="hint",
+                    markup=True,
+                )
 
     def on_mount(self) -> None:
         self._refresh()
@@ -496,7 +532,11 @@ class DeleteModal(ModalScreen):
                     yield Label(f"Confirm  {opt['label']}", id="confirm-modal-title")
                     with Vertical(id="confirm-body"):
                         yield Label(msg, id="confirm-title")
-                        yield Static("[dim]Enter confirm   Esc cancel[/]", id="confirm-hint", markup=True)
+                        yield Static(
+                            "[dim]Enter confirm   Esc cancel[/]",
+                            id="confirm-hint",
+                            markup=True,
+                        )
 
             def action_yes(self_inner) -> None:
                 self_inner.dismiss(True)
@@ -528,7 +568,9 @@ class NodePickerModal(ModalScreen):
       None — cancelled
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="NodePickerModal") + """
+    CSS = (
+        _MODAL_BASE_CSS.format(cls="NodePickerModal")
+        + """
     NodePickerModal #dialog {
         width: 68;
         height: 24;
@@ -572,6 +614,7 @@ class NodePickerModal(ModalScreen):
         height: 1;
     }
     """
+    )
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("up", "move_up", "Up", show=False),
@@ -606,7 +649,7 @@ class NodePickerModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"Link  {self._short_label()}", id="modal-title")
+            yield Label(f"Search {self._short_label()}", id="modal-title")
             with Vertical(id="dialog-body"):
                 if self.show_direction:
                     yield Label("direction  [Tab]", id="dir-label")
@@ -629,9 +672,9 @@ class NodePickerModal(ModalScreen):
             return
         name = self._short_label()
         self.query_one("#dir-parent", Static).update(f"↑ ___  →  {name}")
-        self.query_one("#dir-child",  Static).update(f"↓ {name}  →  ___")
+        self.query_one("#dir-child", Static).update(f"↓ {name}  →  ___")
         self.query_one("#dir-parent").set_class(self._direction == "parent", "--active")
-        self.query_one("#dir-child").set_class(self._direction == "child",  "--active")
+        self.query_one("#dir-child").set_class(self._direction == "child", "--active")
 
     def action_toggle_direction(self) -> None:
         if not self.show_direction:
@@ -658,7 +701,8 @@ class NodePickerModal(ModalScreen):
 
         if query.strip():
             nodes = [
-                n for n in self.graph.search_nodes(query)
+                n
+                for n in self.graph.search_nodes(query)
                 if n.node_id != self.exclude_id
             ][:16]
         else:
@@ -696,7 +740,10 @@ class NodePickerModal(ModalScreen):
 
             for i, node_id in enumerate(node_ids):
                 self._matches.append(node_id)
-                t.add_row(self._build_row_text(node_id, is_last=(i == len(node_ids) - 1)), key=node_id)
+                t.add_row(
+                    self._build_row_text(node_id, is_last=(i == len(node_ids) - 1)),
+                    key=node_id,
+                )
 
         self._highlight()
 
@@ -746,9 +793,17 @@ class NodePickerModal(ModalScreen):
             return
         if self._selected == len(self._matches) and self._create_shown:
             query = self.query_one("#widget", Input).value.strip()
-            self.dismiss({"action": "create", "description": query, "direction": self._direction})
+            self.dismiss(
+                {"action": "create", "description": query, "direction": self._direction}
+            )
         else:
-            self.dismiss({"action": "pick", "node_id": self._matches[self._selected], "direction": self._direction})
+            self.dismiss(
+                {
+                    "action": "pick",
+                    "node_id": self._matches[self._selected],
+                    "direction": self._direction,
+                }
+            )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -761,6 +816,7 @@ def _parse_date(text: str) -> Optional[str]:
     """Parse a loose date string to ISO format, or None if unparseable."""
     from datetime import date as _date
     from pfq.dates import parse_date
+
     result = parse_date(text, _date.today())
     return result.isoformat() if result else None
 
@@ -811,7 +867,10 @@ class TargetModal(ModalScreen):
     Or None on cancel.
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="TargetModal") + _DATE_MODAL_CSS.format(cls="TargetModal") + """
+    CSS = (
+        _MODAL_BASE_CSS.format(cls="TargetModal")
+        + _DATE_MODAL_CSS.format(cls="TargetModal")
+        + """
     TargetModal #dialog { width: 52; }
     TargetModal #current { color: $text-muted; margin-bottom: 1; }
     TargetModal #reopen-row { height: 1; margin-top: 1; }
@@ -839,6 +898,7 @@ class TargetModal(ModalScreen):
         text-style: bold;
     }
     """
+    )
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node):
@@ -857,28 +917,49 @@ class TargetModal(ModalScreen):
                     reason = self.node.close_reason or "done"
                     yield Static(f"closed  ·  {reason}", id="current")
                     yield Label("closed date", classes="field-label")
-                    yield Input(value=self.node.closed_at or "",
-                                placeholder="e.g. yesterday / 2026-04-20", id="inp-closed")
+                    yield Input(
+                        value=self.node.closed_at or "",
+                        placeholder="e.g. yesterday / 2026-04-20",
+                        id="inp-closed",
+                    )
                     yield Static("", id="fb-closed", classes="parsed")
                     with Horizontal(id="reopen-row"):
                         yield Static("[dim][ ][/]", id="reopen-box", markup=True)
                         yield Static("[dim] reopen[/]", id="reopen-label", markup=True)
-                    yield Static("[dim]Enter save  Tab reopen  Esc cancel[/]", id="hint", markup=True)
+                    yield Static(
+                        "[dim]Enter save  Tab reopen  Esc cancel[/]",
+                        id="hint",
+                        markup=True,
+                    )
                 else:
                     yield Label("target date", classes="field-label")
-                    yield Input(value=self.node.estimated_closing_date or "",
-                                placeholder="e.g. jun. / in 3 months / thu 30", id="inp-target")
+                    yield Input(
+                        value=self.node.estimated_closing_date or "",
+                        placeholder="e.g. jun. / in 3 months / thu 30",
+                        id="inp-target",
+                    )
                     yield Static("", id="fb-target", classes="parsed")
                     with Vertical(id="section-close"):
                         yield Label("close as:", classes="field-label")
                         with Horizontal(id="reason-row"):
-                            yield Static("done", id="btn-done", classes="reason-btn --active")
-                            yield Static("discarded", id="btn-discarded", classes="reason-btn")
-                        yield Label("close date  (blank = today)", classes="field-label")
-                        yield Input(placeholder="e.g. yesterday / 2d ago", id="inp-closed")
+                            yield Static(
+                                "done", id="btn-done", classes="reason-btn --active"
+                            )
+                            yield Static(
+                                "discarded", id="btn-discarded", classes="reason-btn"
+                            )
+                        yield Label(
+                            "close date  (blank = today)", classes="field-label"
+                        )
+                        yield Input(
+                            placeholder="e.g. yesterday / 2d ago", id="inp-closed"
+                        )
                         yield Static("", id="fb-closed", classes="parsed")
-                    yield Static("[dim]Enter confirm  Tab close section  ←→ reason  Esc cancel[/]",
-                                 id="hint", markup=True)
+                    yield Static(
+                        "[dim]Enter confirm  Tab close section  ←→ reason  Esc cancel[/]",
+                        id="hint",
+                        markup=True,
+                    )
 
     def on_mount(self) -> None:
         if self.node.is_closed:
@@ -891,7 +972,9 @@ class TargetModal(ModalScreen):
 
     def _refresh_reason(self) -> None:
         self.query_one("#btn-done").set_class(self._reason == "done", "--active")
-        self.query_one("#btn-discarded").set_class(self._reason == "discarded", "--active")
+        self.query_one("#btn-discarded").set_class(
+            self._reason == "discarded", "--active"
+        )
 
     def _refresh_close_section(self) -> None:
         self.query_one("#section-close").set_class(self._close_mode, "--active")
@@ -923,12 +1006,21 @@ class TargetModal(ModalScreen):
             event.stop()
             if self._close_mode:
                 raw = self.query_one("#inp-closed", Input).value.strip()
-                self.dismiss({"action": "close", "reason": self._reason,
-                              "closed_at": _parse_date(raw) if raw else None})
+                self.dismiss(
+                    {
+                        "action": "close",
+                        "reason": self._reason,
+                        "closed_at": _parse_date(raw) if raw else None,
+                    }
+                )
             else:
                 raw = self.query_one("#inp-target", Input).value.strip()
-                self.dismiss({"action": "update_target",
-                              "estimated_closing_date": _parse_date(raw) if raw else None})
+                self.dismiss(
+                    {
+                        "action": "update_target",
+                        "estimated_closing_date": _parse_date(raw) if raw else None,
+                    }
+                )
 
     def _refresh_reopen(self) -> None:
         if self._reopen:
@@ -949,8 +1041,12 @@ class TargetModal(ModalScreen):
                 self.dismiss({"action": "reopen"})
             else:
                 raw = self.query_one("#inp-closed", Input).value.strip()
-                self.dismiss({"action": "update_closed_at",
-                              "closed_at": _parse_date(raw) if raw else None})
+                self.dismiss(
+                    {
+                        "action": "update_closed_at",
+                        "closed_at": _parse_date(raw) if raw else None,
+                    }
+                )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -965,7 +1061,9 @@ class UpdateModal(ModalScreen):
     Dismisses with {"opened_at": str|None, "update_period": int|None}, or None on cancel.
     """
 
-    CSS = _MODAL_BASE_CSS.format(cls="UpdateModal") + _DATE_MODAL_CSS.format(cls="UpdateModal")
+    CSS = _MODAL_BASE_CSS.format(cls="UpdateModal") + _DATE_MODAL_CSS.format(
+        cls="UpdateModal"
+    )
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def __init__(self, node: Node):
@@ -974,19 +1072,31 @@ class UpdateModal(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"Update  {(self.node.description or '')[:34]}", id="modal-title")
+            yield Label(
+                f"Update  {(self.node.description or '')[:34]}", id="modal-title"
+            )
             with Vertical(id="dialog-body"):
                 yield Label("opened", classes="field-label")
-                yield Input(value=self.node.opened_at or "",
-                            placeholder="e.g. 2026-01-01 / last monday", id="inp-opened")
+                yield Input(
+                    value=self.node.opened_at or "",
+                    placeholder="e.g. 2026-01-01 / last monday",
+                    id="inp-opened",
+                )
                 yield Static("", id="fb-opened", classes="parsed")
 
                 yield Label("check every (days)", classes="field-label")
-                yield Input(value=str(self.node.update_period) if self.node.update_period else "",
-                            placeholder="e.g. 7  (leave blank to disable)", id="inp-period")
+                yield Input(
+                    value=(
+                        str(self.node.update_period) if self.node.update_period else ""
+                    ),
+                    placeholder="e.g. 7  (leave blank to disable)",
+                    id="inp-period",
+                )
                 yield Static("", id="fb-period", classes="parsed")
 
-                yield Static("[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
+                yield Static(
+                    "[dim]Enter  confirm   Esc  cancel[/]", id="hint", markup=True
+                )
 
     def on_mount(self) -> None:
         self.query_one("#inp-opened", Input).focus()
@@ -1034,7 +1144,6 @@ class UpdateModal(ModalScreen):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
-
 
 
 # ── Sync ───────────────────────────────────────────────────────────────────────
@@ -1104,7 +1213,7 @@ class SyncModal(ModalScreen):
 
     _OPTIONS = [
         ("sync_quit", "Sync and quit", "Commit, push, then exit"),
-        ("quit",      "Quit without sync", "Exit immediately"),
+        ("quit", "Quit without sync", "Exit immediately"),
     ]
 
     def __init__(self, has_changes: bool):
@@ -1116,13 +1225,21 @@ class SyncModal(ModalScreen):
         with Vertical(id="dialog"):
             yield Label("Quit", id="modal-title")
             with Vertical(id="dialog-body"):
-                status = "Uncommitted changes detected." if self.has_changes else "No local changes."
+                status = (
+                    "Uncommitted changes detected."
+                    if self.has_changes
+                    else "No local changes."
+                )
                 yield Static(status, id="sync-status")
                 for i, (_, label, detail) in enumerate(self._OPTIONS):
                     with Vertical(classes="sync-opt", id=f"sopt-{i}"):
                         yield Static(label, classes="sync-opt-label")
                         yield Static(detail, classes="sync-opt-detail")
-                yield Static("[dim]↑↓ select   Enter confirm   Esc cancel[/]", id="hint", markup=True)
+                yield Static(
+                    "[dim]↑↓ select   Enter confirm   Esc cancel[/]",
+                    id="hint",
+                    markup=True,
+                )
 
     def on_mount(self) -> None:
         self._refresh()
@@ -1152,7 +1269,9 @@ class SyncModal(ModalScreen):
 class EditModal(ModalScreen):
     """Single-field editor. Driven by FIELDS config — no hardcoded field logic."""
 
-    CSS = _MODAL_BASE_CSS.format(cls="EditModal") + """
+    CSS = (
+        _MODAL_BASE_CSS.format(cls="EditModal")
+        + """
     EditModal #dialog {
         width: 72;
     }
@@ -1165,6 +1284,7 @@ class EditModal(ModalScreen):
         border: tall $primary;
     }
     """
+    )
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("ctrl+s", "submit_textarea", "Save", show=False),
@@ -1184,13 +1304,26 @@ class EditModal(ModalScreen):
                 if self.field["kind"] == "select":
                     options = self.field["options"]
                     extra = {"value": current} if current in options else {}
-                    yield Select([(o, o) for o in options], allow_blank=True, id="widget", **extra)
+                    yield Select(
+                        [(o, o) for o in options],
+                        allow_blank=True,
+                        id="widget",
+                        **extra,
+                    )
                 elif self.field["kind"] == "textarea":
                     yield TextArea(current, id="widget")
-                    yield Static("[dim]ctrl+s  save  [/][dim]esc  cancel[/]", id="hint", markup=True)
+                    yield Static(
+                        "[dim]ctrl+s  save  [/][dim]esc  cancel[/]",
+                        id="hint",
+                        markup=True,
+                    )
                 else:
                     yield Input(value=current, id="widget")
-                    yield Static("[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]", id="hint", markup=True)
+                    yield Static(
+                        "[dim]\\[enter] confirm  [/][dim]\\[esc] cancel[/]",
+                        id="hint",
+                        markup=True,
+                    )
 
     def on_mount(self) -> None:
         self.query_one("#widget").focus()

@@ -463,6 +463,7 @@ class PfqApp(App):
 
     def action_link_parent(self) -> None:
         if self.current_node_id is None:
+            self.notify("Select a node first to create a link", severity="warning")
             return
         t = self._table()
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
