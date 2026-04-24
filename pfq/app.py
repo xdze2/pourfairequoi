@@ -3,6 +3,7 @@
 Coordinates navigation, editing, and structural mutations.
 All rendering is delegated to render.py; all view-model building to view.py.
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -23,8 +24,24 @@ from pfq.disk_io import (
     save_node_fields,
     save_vault,
 )
-from pfq.modals import CreateModal, DeleteModal, EditModal, HelpModal, NodePickerModal, SyncModal, TargetModal, UpdateModal
-from pfq.sync import commit_and_push, get_remote_name, has_remote, has_uncommitted_changes, is_git_repo, pull
+from pfq.modals import (
+    CreateModal,
+    DeleteModal,
+    EditModal,
+    HelpModal,
+    NodePickerModal,
+    SyncModal,
+    TargetModal,
+    UpdateModal,
+)
+from pfq.sync import (
+    commit_and_push,
+    get_remote_name,
+    has_remote,
+    has_uncommitted_changes,
+    is_git_repo,
+    pull,
+)
 from pfq.render import PALETTE, render_to_table, render_to_text
 from pfq.view import ViewRow, build_home_view, build_node_view
 
@@ -76,19 +93,31 @@ class PfqApp(App):
     """
     BINDINGS = [
         Binding("q", "request_quit", "Quit"),
+        Binding("escape", "go_back", "Back", show=False),
+        Binding(
+            "not_a_key",
+            "noop",
+            "nav",
+            key_display="↑↓←→ ↵ esc",
+            group=Binding.Group("navigate"),
+        ),  # Hack
+        Binding("s", "jump", "Search"),
+        Binding("e", "edit_node", "Edit"),
+        Binding("a", "append_node", "Append"),
+        Binding("z", "link_parent", "Link"),
+        Binding("d", "delete", "Delete"),
+        Binding("shift+up", "reorder_up", "Move up", group=Binding.Group("Order")),
+        Binding(
+            "shift+down",
+            "reorder_down",
+            "Move down",
+            key_display="↓",
+            group=Binding.Group("Order"),
+        ),
+        Binding("y", "yank_view", "Copy view"),
         Binding("f5", "sync", "Sync"),
-        Binding("h", "go_home", "Home",         group=Binding.Group("navigate")),
-        Binding("escape", "go_back", "Back",    group=Binding.Group("navigate")),
-        Binding("s", "jump", "Search",          group=Binding.Group("navigate")),
-        Binding("e", "edit_node", "Edit",       group=Binding.Group("edit")),
-        Binding("a", "append_node", "Append node", group=Binding.Group("edit")),
-        Binding("z", "link_parent", "Link",     group=Binding.Group("edit")),
-        Binding("d", "delete", "Delete",        group=Binding.Group("edit")),
-        Binding("shift+up", "reorder_up", "Move up", show=False),
-        Binding("shift+down", "reorder_down", "Move down", show=False),
-        Binding("y", "yank_view", "Copy",       group=Binding.Group("view")),
-        Binding("f2", "toggle_companion", "AI", group=Binding.Group("view")),
-        Binding("f1", "toggle_help", "Help",    group=Binding.Group("view")),
+        Binding("f2", "toggle_companion", "AI"),
+        Binding("f1", "toggle_help", "Help", show=False),
     ]
 
     def __init__(self, vault_path: Path = DEFAULT_VAULT_PATH):
@@ -167,7 +196,13 @@ class PfqApp(App):
         if cursor_row is not None:
             self._table().move_cursor(row=min(cursor_row, len(rows) - 1), column=col)
 
-    def _show_node(self, node_id: str, *, cursor_row: Optional[int] = None, cursor_node_id: Optional[str] = None) -> None:
+    def _show_node(
+        self,
+        node_id: str,
+        *,
+        cursor_row: Optional[int] = None,
+        cursor_node_id: Optional[str] = None,
+    ) -> None:
         self.current_node_id = node_id
         col = self._table().cursor_coordinate.column
         rows = build_node_view(self.graph, node_id)
@@ -176,7 +211,14 @@ class PfqApp(App):
         selected_row = next(i for i, r in enumerate(rows) if r.role == "selected")
         if cursor_node_id is not None:
             # try to land on the same node; fall back to previous row position
-            found = next((i for i, r in enumerate(rows) if r.node and r.node.node_id == cursor_node_id), None)
+            found = next(
+                (
+                    i
+                    for i, r in enumerate(rows)
+                    if r.node and r.node.node_id == cursor_node_id
+                ),
+                None,
+            )
             target = found if found is not None else min(cursor_row or 0, len(rows) - 1)
         elif cursor_row is not None:
             target = min(cursor_row, len(rows) - 1)
@@ -189,7 +231,6 @@ class PfqApp(App):
     def _navigate_to(self, node_id: str) -> None:
         self.history.append(self.current_node_id)
         self._show_node(node_id)
-
 
     _NON_NODE_KEYS = {"__home__"}
 
@@ -239,13 +280,22 @@ class PfqApp(App):
         node = self.graph.get_node(row_key)
         saved_row = t.cursor_coordinate.row
         if col_key == "pulse":
-            self.push_screen(UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row))
+            self.push_screen(
+                UpdateModal(node), lambda r: self._on_update_done(r, row_key, saved_row)
+            )
         elif col_key == "target":
-            self.push_screen(TargetModal(node), lambda r: self._on_target_done(r, row_key, saved_row))
+            self.push_screen(
+                TargetModal(node), lambda r: self._on_target_done(r, row_key, saved_row)
+            )
         else:
-            self.push_screen(EditModal(node, col_key), lambda r: self._on_edit_done(r, row_key, saved_row))
+            self.push_screen(
+                EditModal(node, col_key),
+                lambda r: self._on_edit_done(r, row_key, saved_row),
+            )
 
-    def _on_edit_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+    def _on_edit_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
+    ) -> None:
         t = self._table()
         if result is None:
             t.move_cursor(row=cursor_row)
@@ -257,10 +307,14 @@ class PfqApp(App):
         if self.current_node_id is None:
             self._show_home(cursor_row=cursor_row)
         else:
-            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
         t.focus()
 
-    def _on_target_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+    def _on_target_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
+    ) -> None:
         t = self._table()
         if result is None:
             t.focus()
@@ -280,14 +334,19 @@ class PfqApp(App):
             node.close_reason = None
         save_node_fields(node)
         from pfq.model import compute_lifecycle
+
         compute_lifecycle(self.graph)
         if self.current_node_id is None:
             self._show_home(cursor_row=cursor_row)
         else:
-            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
         t.focus()
 
-    def _on_update_done(self, result: Optional[dict], row_key: str, cursor_row: int) -> None:
+    def _on_update_done(
+        self, result: Optional[dict], row_key: str, cursor_row: int
+    ) -> None:
         t = self._table()
         if result is None:
             t.focus()
@@ -297,11 +356,14 @@ class PfqApp(App):
         node.update_period = result["update_period"]
         save_node_fields(node)
         from pfq.model import compute_lifecycle
+
         compute_lifecycle(self.graph)
         if self.current_node_id is None:
             self._show_home(cursor_row=cursor_row)
         else:
-            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key)
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=row_key
+            )
         t.focus()
 
     # ── Append ─────────────────────────────────────────────────────────────────
@@ -357,7 +419,12 @@ class PfqApp(App):
         self.graph.add_node(node)
         self._show_home()
 
-    def _on_create_child_with_mode(self, result: Optional[dict], cursor_node_id: str, sibling_parent_id: Optional[str]) -> None:
+    def _on_create_child_with_mode(
+        self,
+        result: Optional[dict],
+        cursor_node_id: str,
+        sibling_parent_id: Optional[str],
+    ) -> None:
         """Create a new node as child of cursor, or sibling of cursor (under sibling_parent_id)."""
         if not result:
             return
@@ -371,7 +438,11 @@ class PfqApp(App):
         else:  # sibling
             if sibling_parent_id is not None:
                 siblings = self.graph.get_children_ids(sibling_parent_id)
-                position = siblings.index(cursor_node_id) + 1 if cursor_node_id in siblings else len(siblings)
+                position = (
+                    siblings.index(cursor_node_id) + 1
+                    if cursor_node_id in siblings
+                    else len(siblings)
+                )
                 self.graph.link_child(sibling_parent_id, node.node_id, position)
             # else: cursor is a root → new node is also an unlinked root (no link needed)
 
@@ -380,6 +451,7 @@ class PfqApp(App):
             node.close_reason = "done"
             save_node_fields(node)
             from pfq.model import compute_lifecycle
+
             compute_lifecycle(self.graph)
         save_vault(self.graph)
         if self.current_node_id is None:
@@ -398,7 +470,13 @@ class PfqApp(App):
             return
         node_label = self.graph.get_node(row_key).description or row_key
         self.push_screen(
-            NodePickerModal(self.graph, allow_create=True, exclude_id=row_key, show_direction=True, node_label=node_label),
+            NodePickerModal(
+                self.graph,
+                allow_create=True,
+                exclude_id=row_key,
+                show_direction=True,
+                node_label=node_label,
+            ),
             lambda result: self._on_link_done(result, row_key),
         )
 
@@ -414,10 +492,14 @@ class PfqApp(App):
             other_id = result["node_id"]
         if direction == "parent":
             # node_id becomes child of other_id
-            self.graph.link_child(other_id, node_id, len(self.graph.get_children_ids(other_id)))
+            self.graph.link_child(
+                other_id, node_id, len(self.graph.get_children_ids(other_id))
+            )
         else:
             # node_id becomes parent of other_id
-            self.graph.link_child(node_id, other_id, len(self.graph.get_children_ids(node_id)))
+            self.graph.link_child(
+                node_id, other_id, len(self.graph.get_children_ids(node_id))
+            )
         save_vault(self.graph)
         self._show_node(self.current_node_id)
 
@@ -431,8 +513,11 @@ class PfqApp(App):
         if row_key in (self.current_node_id, "__home__"):
             return
         parent_id = next(
-            (r.visible_parent_id for r in self._last_view
-             if r.node and r.node.node_id == row_key and r.role == "child"),
+            (
+                r.visible_parent_id
+                for r in self._last_view
+                if r.node and r.node.node_id == row_key and r.role == "child"
+            ),
             None,
         )
         if parent_id is None:
@@ -441,7 +526,8 @@ class PfqApp(App):
         save_vault(self.graph)
         rows = build_node_view(self.graph, self.current_node_id)
         new_pos = next(
-            (i for i, r in enumerate(rows) if r.node and r.node.node_id == row_key), None
+            (i for i, r in enumerate(rows) if r.node and r.node.node_id == row_key),
+            None,
         )
         self._show_node(self.current_node_id, cursor_row=new_pos)
 
@@ -466,7 +552,9 @@ class PfqApp(App):
         try:
             import pyperclip
         except ImportError:
-            self.notify("pyperclip not installed — run: pip install pyperclip", severity="error")
+            self.notify(
+                "pyperclip not installed — run: pip install pyperclip", severity="error"
+            )
             return
         text = render_to_text(self._last_view)
         try:
@@ -524,7 +612,9 @@ class PfqApp(App):
         options = self._build_delete_options(row_key, unlink_pair)
         self.push_screen(
             DeleteModal(node_label, options),
-            lambda result: self._on_delete_done(result, row_key, unlink_pair, saved_cursor_row),
+            lambda result: self._on_delete_done(
+                result, row_key, unlink_pair, saved_cursor_row
+            ),
         )
 
     def _build_delete_options(self, node_id: str, unlink_pair: Optional[tuple]) -> list:
@@ -534,55 +624,75 @@ class PfqApp(App):
             parent_id, child_id = unlink_pair
             other_id = child_id if child_id != node_id else parent_id
             other_label = self.graph.get_node(other_id).description or other_id
-            options.append({
-                "key": "unlink",
-                "label": f'Unlink from "{other_label}"',
-                "detail": "Both nodes stay — only this link is removed.",
-                "nodes": [],
-            })
+            options.append(
+                {
+                    "key": "unlink",
+                    "label": f'Unlink from "{other_label}"',
+                    "detail": "Both nodes stay — only this link is removed.",
+                    "nodes": [],
+                }
+            )
 
         orphans = [
             self.graph.get_node(nid).description or nid
             for nid in self.graph.get_children_ids(node_id)
             if len(self.graph.get_parent_ids(nid)) == 1
         ]
-        orphan_note = f"{len(orphans)} {'child' if len(orphans) == 1 else 'children'} will become unanchored." if orphans else "No other nodes affected."
-        options.append({
-            "key": "node",
-            "label": "Delete node",
-            "detail": orphan_note,
-            "nodes": [],
-        })
+        orphan_note = (
+            f"{len(orphans)} {'child' if len(orphans) == 1 else 'children'} will become unanchored."
+            if orphans
+            else "No other nodes affected."
+        )
+        options.append(
+            {
+                "key": "node",
+                "label": "Delete node",
+                "detail": orphan_note,
+                "nodes": [],
+            }
+        )
 
         soft_set = self.graph.deletion_set(node_id, "soft")
         if len(soft_set) > 1:
             soft_nodes = [
                 self.graph.get_node(nid).description or nid
-                for nid in soft_set if nid != node_id
+                for nid in soft_set
+                if nid != node_id
             ]
-            options.append({
-                "key": "soft",
-                "label": f"Delete + remove unanchored  ({len(soft_set)} nodes)",
-                "detail": "Also removes nodes that would lose all paths to a root.",
-                "nodes": soft_nodes,
-            })
+            options.append(
+                {
+                    "key": "soft",
+                    "label": f"Delete + remove unanchored  ({len(soft_set)} nodes)",
+                    "detail": "Also removes nodes that would lose all paths to a root.",
+                    "nodes": soft_nodes,
+                }
+            )
 
         hard_set = self.graph.deletion_set(node_id, "hard")
         if len(hard_set) > 1:
             hard_nodes = [
                 self.graph.get_node(nid).description or nid
-                for nid in hard_set if nid != node_id
+                for nid in hard_set
+                if nid != node_id
             ]
-            options.append({
-                "key": "hard",
-                "label": f"Delete subtree  ({len(hard_set)} nodes)",
-                "detail": "Removes all descendants regardless of other parents.",
-                "nodes": hard_nodes,
-            })
+            options.append(
+                {
+                    "key": "hard",
+                    "label": f"Delete subtree  ({len(hard_set)} nodes)",
+                    "detail": "Removes all descendants regardless of other parents.",
+                    "nodes": hard_nodes,
+                }
+            )
 
         return options
 
-    def _on_delete_done(self, result: Optional[str], node_id: str, unlink_pair: Optional[tuple], cursor_row: int) -> None:
+    def _on_delete_done(
+        self,
+        result: Optional[str],
+        node_id: str,
+        unlink_pair: Optional[tuple],
+        cursor_row: int,
+    ) -> None:
         if result is None:
             return
 
@@ -593,7 +703,9 @@ class PfqApp(App):
             self.graph.unlink_child(parent_id, child_id)
             save_vault(self.graph)
             # node stays in graph — seek it by id; cursor_row is the fallback
-            self._show_node(self.current_node_id, cursor_row=cursor_row, cursor_node_id=node_id)
+            self._show_node(
+                self.current_node_id, cursor_row=cursor_row, cursor_node_id=node_id
+            )
             return
 
         if result == "node":
@@ -645,7 +757,11 @@ class PfqApp(App):
         save_vault(self.graph)
         if navigating_away:
             prev = next(
-                (p for p in reversed(self.history) if p is not None and p not in node_ids),
+                (
+                    p
+                    for p in reversed(self.history)
+                    if p is not None and p not in node_ids
+                ),
                 None,
             )
             self.history = [p for p in self.history if p not in node_ids]

@@ -1,14 +1,14 @@
 # PourFaireQuoi (pfq)
 
-**pfq** — the personal task manager for *why* and *how*.
+**pfq** — A personal task manager for *why* and *how*.
 
-Every task has four questions: *what*, *why*, *how*, and *when*.
+Every task has four questions: *what*, *why*, *how*, and *when*.  
 Most tools handle *what* (todo list) and *when* (calendar). pfq handles *why* and *how*.
 
-Navigating up always answers *why* — every action is connected to the goal behind it.
-Navigating down always answers *how* — every goal decomposes into the steps that achieve it.
+Navigating up answers *why* — every action is connected to the goal behind it.  
+Navigating down answers *how* — every goal decomposes into the steps that achieve it.
 
-**Neither a flat list nor a tangled graph.** pfq shows only your local neighbourhood — two levels up, two levels down — rendered as a tree. Structure is always visible; the rest of the graph stays out of the way.
+Neither a flat list nor a tangled graph. Only your local neighbourhood is shown — two levels up, two levels down — rendered as a tree. Structure is visible; the rest of the graph stays out of the way.
 
 
 ```
@@ -34,7 +34,8 @@ More screenshots: [home](screenshots/01_home.svg) · [companion](screenshots/03_
 
 ### Nodes and links
 
-A node is a single unit of thought — a goal, a project, a task, an idea. All share the same structure; their role is determined by position in the graph.
+A node is a single unit of thought or event — a goal, a project, a task, an idea, an event, a deadline.
+All share the same structure; their role is determined by position in the graph.
 
 Links are directional: `how` (downward, decomposition) and `why` (upward, motivation — derived by reversing `how`, never stored).
 
