@@ -81,7 +81,7 @@ class PfqApp(App):
         Binding("escape", "go_back", "Back",    group=Binding.Group("navigate")),
         Binding("s", "jump", "Search",          group=Binding.Group("navigate")),
         Binding("e", "edit_node", "Edit",       group=Binding.Group("edit")),
-        Binding("a", "append_node", "Append",   group=Binding.Group("edit")),
+        Binding("a", "append_node", "Append node", group=Binding.Group("edit")),
         Binding("z", "link_parent", "Link",     group=Binding.Group("edit")),
         Binding("d", "delete", "Delete",        group=Binding.Group("edit")),
         Binding("shift+up", "reorder_up", "Move up", show=False),
@@ -309,38 +309,45 @@ class PfqApp(App):
     def action_append_node(self) -> None:
         """Append a new node relative to the cursor.
 
-        Home view: create root. Selected row: append child at end.
-        Child row: append sibling after focused node, under its visible parent.
+        Home view: create root (no mode choice).
+        Any node row: child mode puts new node under cursor; sibling mode puts it
+        beside cursor (under cursor's parent, or as a new root if cursor is root).
+        Default mode: child for parent/selected rows, sibling for child rows.
         """
         t = self._table()
 
-        if self.current_node_id is None:
-            self.push_screen(CreateModal("(root)"), self._on_create_root)
+        if not t.is_valid_coordinate(t.cursor_coordinate):
+            self.push_screen(CreateModal("", show_mode=False), self._on_create_root)
             return
 
         row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
-        if row_key == "__home__" or row_key not in self.graph.nodes:
-            return
-
         focused_row = next(
             (r for r in self._last_view if r.node and r.node.node_id == row_key), None
         )
-        if focused_row is None or focused_row.role == "parent":
+
+        if focused_row is None or row_key not in self.graph.nodes:
+            # No real node under cursor (home sentinel, empty vault, …) → create root
+            self.push_screen(CreateModal("", show_mode=False), self._on_create_root)
             return
 
-        if focused_row.role == "selected":
-            actual_parent_id = self.current_node_id
-            position = len(self.graph.get_children_ids(self.current_node_id))
-        else:  # child
-            visible_parent_id = focused_row.visible_parent_id or self.current_node_id
-            siblings = self.graph.get_children_ids(visible_parent_id)
-            position = siblings.index(row_key) + 1 if row_key in siblings else len(siblings)
-            actual_parent_id = visible_parent_id
+        cursor_node_id = row_key
+        cursor_label = focused_row.node.description or row_key
 
-        label = self.graph.get_node(actual_parent_id).description or actual_parent_id
+        # For sibling mode: the parent of the cursor node
+        if focused_row.role == "child":
+            sibling_parent_id = focused_row.visible_parent_id or self.current_node_id
+            default_mode = "sibling"
+        else:  # parent or selected row
+            parents = self.graph.get_parent_ids(cursor_node_id)
+            sibling_parent_id = parents[0] if parents else None  # None → cursor is root
+            default_mode = "child"
+
+        def _on_done(result, *, _cursor=cursor_node_id, _sib_parent=sibling_parent_id):
+            self._on_create_child_with_mode(result, _cursor, _sib_parent)
+
         self.push_screen(
-            CreateModal(label),
-            lambda desc: self._on_create_child(desc, position, actual_parent_id),
+            CreateModal(cursor_label, mode=default_mode),
+            _on_done,
         )
 
     def _on_create_root(self, result: Optional[dict]) -> None:
@@ -350,12 +357,24 @@ class PfqApp(App):
         self.graph.add_node(node)
         self._show_home()
 
-    def _on_create_child(self, result: Optional[dict], position: int, parent_id: str) -> None:
+    def _on_create_child_with_mode(self, result: Optional[dict], cursor_node_id: str, sibling_parent_id: Optional[str]) -> None:
+        """Create a new node as child of cursor, or sibling of cursor (under sibling_parent_id)."""
         if not result:
             return
+        mode = result.get("mode", "child")
         node = create_node(result["description"], self.vault_path)
         self.graph.add_node(node)
-        self.graph.link_child(parent_id, node.node_id, position)
+
+        if mode == "child":
+            position = len(self.graph.get_children_ids(cursor_node_id))
+            self.graph.link_child(cursor_node_id, node.node_id, position)
+        else:  # sibling
+            if sibling_parent_id is not None:
+                siblings = self.graph.get_children_ids(sibling_parent_id)
+                position = siblings.index(cursor_node_id) + 1 if cursor_node_id in siblings else len(siblings)
+                self.graph.link_child(sibling_parent_id, node.node_id, position)
+            # else: cursor is a root → new node is also an unlinked root (no link needed)
+
         if result.get("close"):
             node.closed_at = date.today().isoformat()
             node.close_reason = "done"
@@ -363,7 +382,10 @@ class PfqApp(App):
             from pfq.model import compute_lifecycle
             compute_lifecycle(self.graph)
         save_vault(self.graph)
-        self._show_node(self.current_node_id)
+        if self.current_node_id is None:
+            self._show_home()
+        else:
+            self._show_node(self.current_node_id)
 
     # ── Link ───────────────────────────────────────────────────────────────────
 

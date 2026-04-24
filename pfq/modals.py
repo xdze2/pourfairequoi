@@ -7,7 +7,9 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import DataTable, Input, Label, Select, Static, TextArea
 
 from pfq.config import FIELDS
@@ -23,7 +25,7 @@ _HELP_BINDINGS = [
         ("s",             "Search / jump"),
     ]),
     ("edit", [
-        ("a",             "Append child (or root)"),
+        ("a",             "Append node (child or sibling)"),
         ("e",             "Edit focused cell"),
         ("z",             "Link to parent"),
         ("d",             "Delete / unlink"),
@@ -148,67 +150,179 @@ _MODAL_BASE_CSS = """
 # ── Create ─────────────────────────────────────────────────────────────────────
 
 
-class CreateModal(ModalScreen):
-    """Prompt for a description + optional close-immediately toggle.
+class _Toggle(Widget, can_focus=True):
+    """Focusable toggle widget.  Space flips it; renders as [x]/[ ] checkbox.
 
-    Dismisses with {"description": str, "close": bool}, or None on cancel.
-    Tab toggles the close checkbox; Enter confirms.
+    For mode selection (radio style), set radio=True: the box always shows [●]
+    and the label reflects the current value instead of checked/unchecked state.
+    Posts _Toggle.Changed when flipped.
+    """
+
+    DEFAULT_CSS = "_Toggle { height: 1; margin-top: 1; }"
+
+    class Changed(Message):
+        def __init__(self, toggle: "_Toggle") -> None:
+            super().__init__()
+            self.toggle = toggle
+
+    def __init__(self, label_on: str, label_off: str = "", value: bool = True,
+                 radio: bool = False, widget_id: str | None = None):
+        super().__init__(id=widget_id)
+        self.label_on = label_on
+        self.label_off = label_off or label_on
+        self.value = value
+        self.radio = radio
+
+    def render(self) -> Text:
+        label = self.label_on if self.value else self.label_off
+        if self.has_focus:
+            box = "● " if self.radio else ("[x] " if self.value else "[ ] ")
+            return Text.assemble((box + label, "reverse"))
+        if self.radio:
+            return Text.assemble(("● ", ""), (label, "bold"))
+        if self.value:
+            return Text.assemble(("[x] ", "bold green"), (label, "bold"))
+        else:
+            return Text.assemble(("[ ] ", "dim"), (label, "dim"))
+
+    def flip(self) -> None:
+        self.value = not self.value
+        self.refresh()
+        self.post_message(self.Changed(self))
+
+    def on_key(self, event) -> None:
+        if event.key == "space":
+            event.stop()
+            event.prevent_default()
+            self.flip()
+
+    def on_focus(self) -> None:
+        self.refresh()
+
+    def on_blur(self) -> None:
+        self.refresh()
+
+
+class CreateModal(ModalScreen):
+    """Prompt for a new node description with mode (child/sibling) and close toggles.
+
+    Dismisses with {"description": str, "mode": "child"|"sibling", "close": bool},
+    or None on cancel.
+
+    Tab / ↑↓  navigate between input and toggles
+    Space      flip focused toggle
+    Enter      confirm (from anywhere)
+    Esc        cancel
     """
 
     CSS = _MODAL_BASE_CSS.format(cls="CreateModal") + """
-    CreateModal #dialog { width: 52; }
-    CreateModal #close-row {
-        height: 1;
+    CreateModal #dialog { width: 56; }
+    CreateModal _Toggle { margin-top: 1; }
+    CreateModal #preview {
         margin-top: 1;
+        color: $text-muted;
+        height: auto;
     }
-    CreateModal #close-box { width: 3; }
-    CreateModal #close-label { width: 1fr; }
     CreateModal #hint { margin-top: 1; }
     """
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Confirm", priority=True),
+    ]
 
-    def __init__(self, parent_label: str):
+    def __init__(self, cursor_label: str, mode: str = "child", show_mode: bool = True):
         super().__init__()
-        self.parent_label = parent_label
-        self._close = False
+        self.cursor_label = cursor_label
+        self._default_mode = mode
+        self._show_mode = show_mode
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"Create  {self._short_label()}", id="modal-title")
+            yield Label("Append a node", id="modal-title")
             with Vertical(id="dialog-body"):
                 yield Input(placeholder="Description…", id="widget")
-                with Horizontal(id="close-row"):
-                    yield Static("[dim][ ][/]", id="close-box", markup=True)
-                    yield Static("[dim] close immediately[/]", id="close-label", markup=True)
-                yield Static("[dim]Tab  toggle   Enter  confirm   Esc  cancel[/]", id="hint", markup=True)
-
-    def _short_label(self) -> str:
-        label = self.parent_label or ""
-        return ("under " + (label[:28] + "…" if len(label) > 28 else label)) if label else ""
+                if self._show_mode:
+                    yield _Toggle(
+                        label_on="child", label_off="sibling",
+                        value=(self._default_mode == "child"),
+                        radio=True, widget_id="t-mode",
+                    )
+                yield _Toggle(
+                    label_on="close immediately", label_off="close immediately",
+                    value=False, widget_id="t-close",
+                )
+                yield Static("", id="preview", markup=True)
+                yield Static(
+                    "[dim]Tab ↑↓  navigate   Space  toggle   Enter  confirm   Esc  cancel[/]",
+                    id="hint", markup=True,
+                )
 
     def on_mount(self) -> None:
         self.query_one("#widget").focus()
+        self._refresh_preview()
 
-    def _refresh_toggle(self) -> None:
-        if self._close:
-            self.query_one("#close-box", Static).update("[bold green][x][/]")
-            self.query_one("#close-label", Static).update("[bold] close immediately[/]")
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _short(self, label: str, max_len: int = 24) -> str:
+        label = label or ""
+        return label[:max_len] + "…" if len(label) > max_len else label
+
+    def _mode(self) -> str:
+        if not self._show_mode:
+            return "child"
+        return "child" if self.query_one("#t-mode", _Toggle).value else "sibling"
+
+    def _refresh_preview(self) -> None:
+        desc = self.query_one("#widget", Input).value.strip() or "…"
+        desc = self._short(desc, 28)
+        cursor = self._short(self.cursor_label or "…", 28)
+        close = self.query_one("#t-close", _Toggle).value
+        done = "  [dim]done[/]" if close else ""
+
+        if self._mode() == "child":
+            line1 = cursor
+            line2 = f"  [bold]╰── {desc}[/]{done}"
         else:
-            self.query_one("#close-box", Static).update("[dim][ ][/]")
-            self.query_one("#close-label", Static).update("[dim] close immediately[/]")
+            line1 = f"  ├── {cursor}"
+            line2 = f"  [bold]├── {desc}[/]{done}"
+
+        self.query_one("#preview", Static).update(f"{line1}\n{line2}")
+
+    # ── events ─────────────────────────────────────────────────────────────────
+
+    def on_input_changed(self, _: Input.Changed) -> None:
+        self._refresh_preview()
+
+    def on__toggle_changed(self, _: _Toggle.Changed) -> None:
+        self._refresh_preview()
 
     def on_key(self, event) -> None:
-        if event.key == "tab":
+        """↑/↓ move Textual focus between input and toggles."""
+        focusables = [self.query_one("#widget", Input)]
+        if self._show_mode:
+            focusables.append(self.query_one("#t-mode", _Toggle))
+        focusables.append(self.query_one("#t-close", _Toggle))
+        focused = self.focused
+        if focused not in focusables:
+            return
+        idx = focusables.index(focused)
+        if event.key == "down":
             event.stop()
-            self._close = not self._close
-            self._refresh_toggle()
+            focusables[(idx + 1) % len(focusables)].focus()
+        elif event.key == "up":
+            event.stop()
+            focusables[(idx - 1) % len(focusables)].focus()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        value = event.value.strip()
+    def action_confirm(self) -> None:
+        value = self.query_one("#widget", Input).value.strip()
         if value:
-            self.dismiss({"description": value, "close": self._close})
+            self.dismiss({
+                "description": value,
+                "mode": self._mode(),
+                "close": self.query_one("#t-close", _Toggle).value,
+            })
         else:
-            self.dismiss(None)
+            self.app.bell()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
