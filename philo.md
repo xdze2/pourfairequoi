@@ -29,14 +29,9 @@ So structure isn't just a workaround for computers being bad at language — it'
 
 A structure that clarifies at the start of a project can become an obstacle later, when understanding has deepened and the original framing was too narrow or just wrong. The goal is not to build a permanent ontology but to have a structure that's *good enough now* and can be revised.
 
-## The missing dimension
-
-The *reason* things are connected — the point of view that makes a link meaningful — currently lives only in the author's head. If that context is lost, the structure becomes opaque. Making the perspective explicit (through node types, link types, or annotations) is an open design question.
-
 ## In one sentence
 
 A personal, revisable graph of how you currently think about things — not to capture truth, but to make your thinking navigable.
-
 
 
 ## Tree vs dag

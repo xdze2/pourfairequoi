@@ -1,12 +1,30 @@
 # PourFaireQuoi (pfq)
 
-Most task managers focus on *what* and *when*. pfq focuses on *why* and *how*.
+**pfq** — the personal task manager for *why* and *how*.
 
-It is a personal knowledge graph — a DAG of nodes where up-links mean generalization and down-links mean decomposition. Tasks are just leaf nodes. Goals are just roots.
+Every task has four questions: *what*, *why*, *how*, and *when*.
+Most tools handle *what* (todo list) and *when* (calendar). pfq handles *why* and *how*.
+
+Navigating up always answers *why* — every action is connected to the goal behind it.
+Navigating down always answers *how* — every goal decomposes into the steps that achieve it.
+
+**Neither a flat list nor a tangled graph.** pfq shows only your local neighbourhood — two levels up, two levels down — rendered as a tree. Structure is always visible; the rest of the graph stays out of the way.
+
+
+```
+  ╭──@ Learn guitar
+  ├──@ keep a creative practice
+▶ Practice chords
+  ├──○ Find tutorials online   (done)
+  ├── Learn a first song
+  │   ├──○ Pick a simple song
+  │   ╰──○ Play it slowly first
+  ╰──○ 1h friday morning
+```
+
 
 ![Node view](screenshots/02_node.svg)
 
-See [philo.md](philo.md) for the full design thinking and [design_principles.md](design_principles.md) for the UI/UX principles that guide implementation decisions.
 
 More screenshots: [home](screenshots/01_home.svg) · [companion](screenshots/03_companion.svg) · [edit modal](screenshots/04_edit_modal.svg) · [delete modal](screenshots/05_delete_modal.svg)
 
