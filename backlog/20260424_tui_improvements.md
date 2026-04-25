@@ -5,7 +5,7 @@ Date: 2026-04-24
 
 - Show secondary link again, see [backlog/improve_2nd_why_display.md]()
 - Fix dates parsing/format!!
-- shift left-right: move identation (as a regular list)
+- [x] shift left-right: move identation (as a regular list)!!
 - [x] Fix col wdith: comment full width (auto is not working)
 - [x] Sort roots by importance (size of downward tree)
 - bug in parents + append

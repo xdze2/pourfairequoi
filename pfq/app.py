@@ -115,6 +115,20 @@ class PfqApp(App):
             key_display="↓",
             group=Binding.Group("Order"),
         ),
+        Binding(
+            "shift+right",
+            "indent_node",
+            "Indent",
+            key_display="→",
+            group=Binding.Group("Order"),
+        ),
+        Binding(
+            "shift+left",
+            "outdent_node",
+            "Outdent",
+            key_display="←",
+            group=Binding.Group("Order"),
+        ),
         Binding("y", "yank_view", "Copy view"),
         Binding("f5", "sync", "Sync"),
         Binding("f2", "toggle_companion", "AI"),
@@ -538,6 +552,90 @@ class PfqApp(App):
 
     def action_reorder_down(self) -> None:
         self._action_reorder(1)
+
+    def action_indent_node(self) -> None:
+        """Shift+Right: make the focused child a child of the sibling above it."""
+        if self.current_node_id is None:
+            return
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key in (self.current_node_id, "__home__"):
+            return
+        parent_id = next(
+            (
+                r.visible_parent_id
+                for r in self._last_view
+                if r.node and r.node.node_id == row_key and r.role == "child"
+            ),
+            None,
+        )
+        if parent_id is None:
+            return
+        siblings = self.graph.get_children_ids(parent_id)
+        idx = siblings.index(row_key)
+        if idx == 0:
+            return  # no sibling above
+        new_parent_id = siblings[idx - 1]
+        self.graph.unlink_child(parent_id, row_key)
+        new_pos = len(self.graph.get_children_ids(new_parent_id))
+        self.graph.link_child(new_parent_id, row_key, new_pos)
+        save_vault(self.graph)
+        rows = build_node_view(self.graph, self.current_node_id)
+        cursor_row = next(
+            (i for i, r in enumerate(rows) if r.node and r.node.node_id == row_key),
+            None,
+        )
+        self._show_node(self.current_node_id, cursor_row=cursor_row)
+
+    def action_outdent_node(self) -> None:
+        """Shift+Left: promote the focused child to a sibling of its visible parent."""
+        if self.current_node_id is None:
+            return
+        t = self._table()
+        row_key = str(t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value)
+        if row_key in (self.current_node_id, "__home__"):
+            return
+        # Find the focused row — only allow outdent at depth==2 (direct child of selected)
+        focused_row = next(
+            (r for r in self._last_view if r.node and r.node.node_id == row_key and r.role == "child"),
+            None,
+        )
+        if focused_row is None or focused_row.depth != 2:
+            return
+        parent_id = focused_row.visible_parent_id
+        if parent_id is None:
+            return
+        # Find grandparent: visible parent of the parent row.
+        # "child" rows carry visible_parent_id; "parent"/"selected" rows don't,
+        # so handle the selected-node case separately.
+        if parent_id == self.current_node_id:
+            # parent is the selected node — grandparent is the last "parent" row
+            grandparent_id = next(
+                (r.node.node_id for r in reversed(self._last_view) if r.role == "parent" and r.node),
+                None,
+            )
+        else:
+            grandparent_id = next(
+                (
+                    r.visible_parent_id
+                    for r in self._last_view
+                    if r.node and r.node.node_id == parent_id and r.role == "child"
+                ),
+                None,
+            )
+        self.graph.unlink_child(parent_id, row_key)
+        if grandparent_id is not None:
+            gp_children = self.graph.get_children_ids(grandparent_id)
+            insert_pos = gp_children.index(parent_id) + 1 if parent_id in gp_children else len(gp_children)
+            self.graph.link_child(grandparent_id, row_key, insert_pos)
+        # if grandparent_id is None the node becomes a root (no link needed)
+        save_vault(self.graph)
+        rows = build_node_view(self.graph, self.current_node_id)
+        cursor_row = next(
+            (i for i, r in enumerate(rows) if r.node and r.node.node_id == row_key),
+            None,
+        )
+        self._show_node(self.current_node_id, cursor_row=cursor_row)
 
     # ── Jump ───────────────────────────────────────────────────────────────────
 
