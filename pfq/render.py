@@ -77,7 +77,14 @@ def _tree_prefix_segments(
 
 
 def _desc_cell(
-    role: NodeRole, depth: int, node, bullet: str, *, index: int = 0, items: list = ()
+    role: NodeRole,
+    depth: int,
+    node,
+    bullet: str,
+    *,
+    index: int = 0,
+    items: list = (),
+    also_labels: list = (),
 ) -> Text:
     """Description cell: connector prefix (if any) + bullet + description text.
 
@@ -102,8 +109,10 @@ def _desc_cell(
         depth, index, list(items), reverse=(role == "parent"), bullet=bullet
     ):
         t.append(seg, style="dim" if lvl >= 2 else "")
-    desc_style = "bold" if depth == 0 else ("dim" if depth >= 2 else "")
+    desc_style = "bold" if depth == 0 else ("#B4B4B4" if depth >= 2 else "#EAEAEA")
     t.append((" " if bullet else "") + raw, style=desc_style)
+    if also_labels:
+        t.append("  ← " + ", ".join(also_labels), style="#505050")
     return t
 
 
@@ -134,13 +143,25 @@ def render_to_table(rows: list[ViewRow], table: DataTable) -> None:
     table.clear()
     for row in rows:
         if row.role == "sentinel":
-            table.add_row(Text(), Text("  - roots", style="$foreground 30%"), Text(), Text(), key="__home__")
+            table.add_row(
+                Text(),
+                Text("  - roots", style="$foreground 30%"),
+                Text(),
+                Text(),
+                key="__home__",
+            )
             continue
         node = row.node
         table.add_row(
             _pulse_rich(row),
             _desc_cell(
-                row.role, row.depth, node, row.bullet, index=row.index, items=row.items
+                row.role,
+                row.depth,
+                node,
+                row.bullet,
+                index=row.index,
+                items=row.items,
+                also_labels=row.also_labels,
             ),
             _target_rich(row) if row.when_label else Text(),
             Text(

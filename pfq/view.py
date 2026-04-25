@@ -219,6 +219,7 @@ def build_home_view(graph: NodeGraph, today: date = None) -> list[ViewRow]:
                 today=today,
                 boundary=(i == len(children) - 1),
                 index=i, items=children,
+                visible_parent_id=root_id,
             ))
             seen.add(node.node_id)
 
