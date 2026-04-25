@@ -845,7 +845,9 @@ def _refresh_date_feedback(modal, input_id: str, feedback_id: str) -> None:
         return
     parsed = _parse_date(value)
     if parsed:
-        _set_feedback(modal, feedback_id, f"→ {parsed}", True)
+        from datetime import date as _date
+        display = _date.fromisoformat(parsed).strftime("%d-%m-%Y")
+        _set_feedback(modal, feedback_id, f"→ {display}", True)
     else:
         _set_feedback(modal, feedback_id, "? unrecognised", False)
 
@@ -919,7 +921,7 @@ class TargetModal(ModalScreen):
                     yield Label("closed date", classes="field-label")
                     yield Input(
                         value=self.node.closed_at or "",
-                        placeholder="e.g. yesterday / 2026-04-20",
+                        placeholder="e.g. yesterday / 20-04-2026",
                         id="inp-closed",
                     )
                     yield Static("", id="fb-closed", classes="parsed")
@@ -1079,7 +1081,7 @@ class UpdateModal(ModalScreen):
                 yield Label("opened", classes="field-label")
                 yield Input(
                     value=self.node.opened_at or "",
-                    placeholder="e.g. 2026-01-01 / last monday",
+                    placeholder="e.g. 01-01-2026 / last monday",
                     id="inp-opened",
                 )
                 yield Static("", id="fb-opened", classes="parsed")

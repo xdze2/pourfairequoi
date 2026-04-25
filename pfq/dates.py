@@ -24,10 +24,11 @@ def parse_date(text: str, today: date) -> Optional[date]:
       Named:      today, tomorrow, yesterday
       Relative:   3d, 2w, 1m, 1y          (future)
                   3d ago, 2w ago, 1m ago  (past)
-      Weekday:    fri, sat                 (next occurrence)
-      Weekday+n:  fri 18, thu 30          (nearest matching weekday+day)
-      Month+n:    may 14, jun 21          (nearest matching month+day)
-      Month.:     jun., apr.              (first of that month, future-preferring)
+      Numeric:    12-04, 12-04-2026       (DD-MM or DD-MM-YYYY)
+      Weekday:    fri, sat                 (closest occurrence)
+      Weekday+n:  fri 18, thu 30          (closest matching weekday+day)
+      Month+n:    may 14, jun 21          (closest matching month+day)
+      Month.:     jun., apr.              (closest first-of-month)
       Month. yr:  jun. 2027, apr. 2025
     Returns None if unrecognised.
     """
@@ -40,6 +41,26 @@ def parse_date(text: str, today: date) -> Optional[date]:
         return date.fromisoformat(t)
     except ValueError:
         pass
+
+    # DD-MM-YYYY
+    m = re.fullmatch(r"(\d{1,2})-(\d{1,2})-(\d{4})", t)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+
+    # DD-MM  →  closest occurrence (past or future)
+    m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", t)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+        candidates = []
+        for year in (today.year - 1, today.year, today.year + 1):
+            try:
+                candidates.append(date(year, month, day))
+            except ValueError:
+                pass
+        return _closest(candidates, today) if candidates else None
 
     # Named
     if t == "today":
@@ -92,54 +113,57 @@ def parse_date(text: str, today: date) -> Optional[date]:
         if unit in ("w", "wk"):
             return today - timedelta(weeks=n)
         if unit in ("m", "mo"):
-            month = today.month - n
-            year = today.year + (month - 1) // 12
-            month = (month - 1) % 12 + 1
+            total = today.year * 12 + (today.month - 1) - n
+            year, month = divmod(total, 12)
+            month += 1
             day = min(today.day, _month_days(year, month))
             return date(year, month, day)
         if unit == "y":
             return date(today.year - n, today.month, today.day)
 
-    # Weekday only: "fri" → next occurrence (or today if matches)
+    # Weekday only: "fri" → closest occurrence (past or future)
     if t in _DAYS:
         target_dow = _DAYS[t]
         delta = (target_dow - today.weekday()) % 7
-        return today + timedelta(days=delta or 7)
+        past = today - timedelta(days=(today.weekday() - target_dow) % 7 or 7)
+        future = today + timedelta(days=delta or 7)
+        return _closest([past, future], today)
 
-    # Weekday + day: "fri 18" → nearest future date with that weekday and day
+    # Weekday + day: "fri 18" → closest date with that weekday and day
     m = re.fullmatch(r"([a-z]{3})\s+(\d{1,2})", t)
     if m and m.group(1) in _DAYS:
         dow, day = _DAYS[m.group(1)], int(m.group(2))
-        for delta_months in range(0, 13):
-            month = (today.month + delta_months - 1) % 12 + 1
-            year = today.year + (today.month + delta_months - 1) // 12
+        candidates = []
+        for delta_months in range(-12, 13):
+            total = today.year * 12 + (today.month - 1) + delta_months
+            year, month = divmod(total, 12)
+            month += 1
             try:
                 candidate = date(year, month, day)
             except ValueError:
                 continue
-            if candidate.weekday() == dow and candidate >= today:
-                return candidate
+            if candidate.weekday() == dow:
+                candidates.append(candidate)
+        return _closest(candidates, today) if candidates else None
 
-    # Month + day: "may 14"
+    # Month + day: "may 14" → closest occurrence (past or future)
     m = re.fullmatch(r"([a-z]{3})\.?\s+(\d{1,2})", t)
     if m and m.group(1) in _MONTHS:
         month, day = _MONTHS[m.group(1)], int(m.group(2))
-        for year in (today.year, today.year + 1):
+        candidates = []
+        for year in (today.year - 1, today.year, today.year + 1):
             try:
-                candidate = date(year, month, day)
+                candidates.append(date(year, month, day))
             except ValueError:
-                continue
-            if candidate >= today:
-                return candidate
+                pass
+        return _closest(candidates, today) if candidates else None
 
-    # Month. only: "jun." → first of that month, future-preferring
+    # Month. only: "jun." → closest first-of-month (past or future)
     m = re.fullmatch(r"([a-z]{3})\.", t)
     if m and m.group(1) in _MONTHS:
         month = _MONTHS[m.group(1)]
-        candidate = date(today.year, month, 1)
-        if candidate < today:
-            candidate = date(today.year + 1, month, 1)
-        return candidate
+        candidates = [date(y, month, 1) for y in (today.year - 1, today.year, today.year + 1)]
+        return _closest(candidates, today)
 
     # Month. year: "jun. 2027"
     m = re.fullmatch(r"([a-z]{3})\.\s+(\d{4})", t)
@@ -147,6 +171,11 @@ def parse_date(text: str, today: date) -> Optional[date]:
         return date(int(m.group(2)), _MONTHS[m.group(1)], 1)
 
     return None
+
+
+def _closest(candidates: list[date], today: date) -> date:
+    """Return the date closest to today; break ties in favour of the future."""
+    return min(candidates, key=lambda d: (abs((d - today).days), d < today))
 
 
 def _month_days(year: int, month: int) -> int:
