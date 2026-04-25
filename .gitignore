@@ -5,7 +5,7 @@ data/
 node_modules
 .DS_Store
 *.local
-
+draft_newt_ui
 # Python
 __pycache__/
 *.py[cod]
