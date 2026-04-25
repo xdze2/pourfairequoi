@@ -849,6 +849,24 @@ def _set_feedback(modal, widget_id: str, text: str, ok: bool) -> None:
     w.set_class(not ok and bool(text), "--err")
 
 
+def _parse_period(text: str) -> Optional[int]:
+    """Parse a period string to a number of days, or None if unrecognised.
+
+    Accepts: plain int, or N followed by d / w / m / y (w=7, m=30, y=365).
+    """
+    import re as _re
+    t = text.strip().lower()
+    try:
+        return int(t)
+    except ValueError:
+        pass
+    m = _re.fullmatch(r"(\d+)\s*(d|w|m|y)", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        return n * {"d": 1, "w": 7, "m": 30, "y": 365}[unit]
+    return None
+
+
 def _refresh_date_feedback(modal, input_id: str, feedback_id: str) -> None:
     value = modal.query_one(input_id, Input).value.strip()
     if not value:
@@ -1121,11 +1139,11 @@ class UpdateModal(ModalScreen):
         if not value:
             _set_feedback(self, "#fb-period", "", True)
             return
-        try:
-            days = int(value)
+        days = _parse_period(value)
+        if days is not None:
             _set_feedback(self, "#fb-period", f"→ every {days}d", True)
-        except ValueError:
-            _set_feedback(self, "#fb-period", "? must be a number", False)
+        else:
+            _set_feedback(self, "#fb-period", "? e.g. 7 / 2w / 1m", False)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "inp-opened":
@@ -1147,10 +1165,8 @@ class UpdateModal(ModalScreen):
         period = self.query_one("#inp-period", Input).value.strip()
         result = {"opened_at": _parse_date(opened) if opened else None}
         if period:
-            try:
-                result["update_period"] = int(period)
-            except ValueError:
-                result["update_period"] = self.node.update_period
+            parsed = _parse_period(period)
+            result["update_period"] = parsed if parsed is not None else self.node.update_period
         else:
             result["update_period"] = None
         self.dismiss(result)
