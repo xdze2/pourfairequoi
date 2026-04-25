@@ -24,6 +24,7 @@ def parse_date(text: str, today: date) -> Optional[date]:
       Named:      today, tomorrow, yesterday
       Relative:   3d, 2w, 1m, 1y          (future)
                   3d ago, 2w ago, 1m ago  (past)
+                  +2d, -3w, +1m, -2y     (signed)
       Numeric:    12-04, 12-04-2026       (DD-MM or DD-MM-YYYY)
       Weekday:    fri, sat                 (closest occurrence)
       Weekday+n:  fri 18, thu 30          (closest matching weekday+day)
@@ -69,6 +70,24 @@ def parse_date(text: str, today: date) -> Optional[date]:
         return today + timedelta(days=1)
     if t == "yesterday":
         return today + timedelta(days=-1)
+
+    # Signed relative: +2d / -3w / +1m / -2y
+    m = re.fullmatch(r"([+-])(\d+)\s*(d|wk|w|mo|m|y)", t)
+    if m:
+        sign = 1 if m.group(1) == "+" else -1
+        n, unit = sign * int(m.group(2)), m.group(3)
+        if unit == "d":
+            return today + timedelta(days=n)
+        if unit in ("w", "wk"):
+            return today + timedelta(weeks=n)
+        if unit in ("m", "mo"):
+            total = today.year * 12 + (today.month - 1) + n
+            year, month = divmod(total, 12)
+            month += 1
+            day = min(today.day, _month_days(year, month))
+            return date(year, month, day)
+        if unit == "y":
+            return date(today.year + n, today.month, today.day)
 
     # Relative future: 3d / 2w / 2wk / 1m / 1y
     m = re.fullmatch(r"(\d+)\s*(d|wk|w|mo|m|y)", t)

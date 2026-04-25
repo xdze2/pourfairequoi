@@ -821,6 +821,17 @@ def _parse_date(text: str) -> Optional[str]:
     return result.isoformat() if result else None
 
 
+def _iso_to_display(iso: Optional[str]) -> str:
+    """Convert an ISO date string to DD-MM-YYYY for input pre-fill."""
+    if not iso:
+        return ""
+    from datetime import date as _date
+    try:
+        return _date.fromisoformat(iso).strftime("%d-%m-%Y")
+    except ValueError:
+        return iso
+
+
 _DATE_MODAL_CSS = """
     {cls} #dialog {{ width: 52; }}
     {cls} .field-label {{ color: $text-muted; margin-top: 1; }}
@@ -920,7 +931,7 @@ class TargetModal(ModalScreen):
                     yield Static(f"closed  ·  {reason}", id="current")
                     yield Label("closed date", classes="field-label")
                     yield Input(
-                        value=self.node.closed_at or "",
+                        value=_iso_to_display(self.node.closed_at),
                         placeholder="e.g. yesterday / 20-04-2026",
                         id="inp-closed",
                     )
@@ -936,7 +947,7 @@ class TargetModal(ModalScreen):
                 else:
                     yield Label("target date", classes="field-label")
                     yield Input(
-                        value=self.node.estimated_closing_date or "",
+                        value=_iso_to_display(self.node.estimated_closing_date),
                         placeholder="e.g. jun. / in 3 months / thu 30",
                         id="inp-target",
                     )
@@ -1080,7 +1091,7 @@ class UpdateModal(ModalScreen):
             with Vertical(id="dialog-body"):
                 yield Label("opened", classes="field-label")
                 yield Input(
-                    value=self.node.opened_at or "",
+                    value=_iso_to_display(self.node.opened_at),
                     placeholder="e.g. 01-01-2026 / last monday",
                     id="inp-opened",
                 )
