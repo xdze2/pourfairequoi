@@ -121,10 +121,10 @@ class ViewRow:
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
 
-def _bullet(is_root: bool, is_leaf: bool, depth: int) -> str:
+def _bullet(is_root: bool, is_leaf: bool, children_hidden: bool) -> str:
     if is_root:
         return "@"
-    if depth <= 1:
+    if not children_hidden:
         return ""
     return "○" if is_leaf else "<"
 
@@ -136,6 +136,7 @@ def _make_row(
     depth: int,
     *,
     today: date,
+    children_hidden: bool = False,
     boundary: bool = False,
     index: int = 0,
     items: list = (),
@@ -150,7 +151,7 @@ def _make_row(
     return ViewRow(
         role=role, depth=depth, node=node,
         is_leaf=is_leaf, is_root=is_root,
-        bullet=_bullet(is_root, is_leaf, depth),
+        bullet=_bullet(is_root, is_leaf, children_hidden),
         boundary=boundary, index=index, items=list(items),
         visible_parent_id=visible_parent_id, also_labels=also_labels,
         when_label=_due_label(node, today),
@@ -179,6 +180,7 @@ def build_node_view(graph: NodeGraph, node_id: str, today: date = None) -> list[
     children = graph.get_childrens_tree(node_id)
     seen = {node_id} | {n.node_id for n, _ in parents}
     filtered = [(n, d) for n, d in children if n.node_id not in seen]
+    max_depth = max((d for _, d in filtered), default=0)
     prev_by_depth: dict[int, str] = {0: node_id}
     for i, (node, depth) in enumerate(filtered):
         visible_parent_id = prev_by_depth.get(depth - 1)
@@ -186,6 +188,7 @@ def build_node_view(graph: NodeGraph, node_id: str, today: date = None) -> list[
         rows.append(_make_row(
             graph, node, "child", depth,
             today=today,
+            children_hidden=(depth == max_depth),
             boundary=(i == len(filtered) - 1),
             index=i, items=filtered,
             visible_parent_id=visible_parent_id,
@@ -217,6 +220,7 @@ def build_home_view(graph: NodeGraph, today: date = None) -> list[ViewRow]:
             rows.append(_make_row(
                 graph, node, "child", depth,
                 today=today,
+                children_hidden=True,
                 boundary=(i == len(children) - 1),
                 index=i, items=children,
                 visible_parent_id=root_id,

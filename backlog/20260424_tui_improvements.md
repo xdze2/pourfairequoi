@@ -8,9 +8,10 @@ Date: 2026-04-24
 - [x] shift left-right: move identation (as a regular list)!!
 - [x] Fix col wdith: comment full width (auto is not working)
 - [x] Sort roots by importance (size of downward tree)
+- [x] Fix glyps in home view
 - [tbd] nudge to create layers (max 6-8 child nodes, else than logs) 
 - [tbd] pulse = -2/+2 days view ----> get back the log time idea (cols: day, week, month, col year) ???
-- [hard] Merge home view and regular view (fix symbols leaf in home view)
+- [hard] Merge home view and regular view
 - [hard] Full page calendar view
 - [cool] When a node is collapsed, pulse is propagated upward (min) (with a glyph)
 - [ ] bug in parents + append (--> allow edit only if result is visible in the tree graph)
