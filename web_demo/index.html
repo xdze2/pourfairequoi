@@ -48,16 +48,38 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: width .2s ease, min-width .2s ease;
   }
+  #sidebar.collapsed {
+    width: 36px;
+    min-width: 36px;
+  }
+  #sidebar.collapsed #search-wrap,
+  #sidebar.collapsed #node-list { display: none; }
 
   #sidebar-header {
-    padding: 10px 12px 6px;
+    padding: 8px 10px;
     font-size: 11px;
     color: var(--fg-dim);
     letter-spacing: .08em;
     text-transform: uppercase;
     border-bottom: 1px solid var(--accent);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+  #sidebar-header:hover { color: var(--fg-mid); }
+  #sidebar-title { overflow: hidden; }
+  #sidebar.collapsed #sidebar-title { display: none; }
+  #toggle-btn {
+    flex-shrink: 0;
+    color: var(--fg-dim);
+    font-size: 14px;
+    line-height: 1;
   }
 
   #search-wrap {
@@ -113,71 +135,71 @@
   #breadcrumb span { cursor: pointer; }
   #breadcrumb span:hover { color: var(--fg-mid); }
 
-  /* ── Tree rows ── */
-  .tree-table {
-    width: 100%;
-    border-collapse: collapse;
+  /* ── Cards ── */
+  #tree {
+    display: flex;
+    flex-direction: column;
   }
 
-  .tree-row {
+  .card {
+    padding: 3px 0;
     cursor: default;
+    border-radius: 3px;
   }
-  .tree-row:hover td { background: var(--selected-bg); }
+  .card:hover { background: var(--selected-bg); }
+  .card.selected { background: var(--selected-bg); }
+  .card.clickable { cursor: pointer; }
 
-  .tree-row.selected td { background: var(--selected-bg); }
-  .tree-row.selected .desc-cell { font-weight: bold; }
-
-  .tree-row.home-root .desc-cell { font-weight: bold; }
-
-  td {
-    padding: 1px 6px;
+  .card-line1,
+  .card-line2,
+  .card-line3 {
+    display: flex;
+    align-items: baseline;
     white-space: pre;
-    vertical-align: middle;
+    line-height: 1.5;
+  }
+  .card-line2,
+  .card-line3 {
+    font-size: 12px;
   }
 
-  .pulse-cell {
-    width: 80px;
-    min-width: 80px;
-    text-align: right;
-    font-size: 12px;
-  }
-  .desc-cell {
-    min-width: 300px;
-  }
-  .when-cell {
-    width: 140px;
-    min-width: 100px;
-    font-size: 12px;
-    color: #5a9aaa;
-  }
-  .comment-cell {
-    color: #505a60;
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 260px;
-    white-space: nowrap;
-  }
-
-  .sentinel-row td {
+  /* sentinel divider */
+  .sentinel-card {
     color: var(--fg-dim);
-    padding-top: 4px;
-    padding-bottom: 4px;
-    cursor: default;
+    padding: 6px 0 4px;
+    font-size: 12px;
   }
 
-  /* connector chars: dim for deep levels */
-  .connector { color: var(--fg-dim); }
+  /* connector chars */
+  .connector      { color: var(--fg-dim); }
   .connector-deep { color: #2a3a4a; }
 
-  /* desc text colours by depth */
-  .desc-d0 { color: var(--fg); }
-  .desc-d1 { color: #eaeaea; }
-  .desc-d2 { color: #b4b4b4; }
-  .desc-selected { color: var(--fg); font-weight: bold; }
+  /* desc text by depth */
+  .desc-d0        { color: var(--fg); }
+  .desc-d1        { color: #eaeaea; }
+  .desc-d2        { color: #b4b4b4; }
+  .desc-selected  { color: var(--fg); font-weight: bold; }
   .selected-glyph { color: var(--fg); font-weight: bold; }
 
   .also { color: #505050; }
+
+  /* comment line */
+  .card-comment {
+    color: #505a60;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+
+  /* pulse + when line */
+  .card-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .card-pulse { flex: 0 0 auto; }
+  .card-when  { flex: 0 0 auto; margin-left: auto; }
 
   /* pulse colours */
   .pulse-overdue  { color: var(--c-overdue); }
@@ -214,7 +236,10 @@
 <body>
 
 <nav id="sidebar">
-  <div id="sidebar-header">pfq</div>
+  <div id="sidebar-header">
+    <span id="sidebar-title">pfq</span>
+    <span id="toggle-btn">‹</span>
+  </div>
   <div id="search-wrap">
     <input id="search" type="text" placeholder="search…" autocomplete="off" spellcheck="false">
   </div>
@@ -224,7 +249,7 @@
 <main id="main">
   <div id="breadcrumb"></div>
   <button id="home-btn">⌂ home</button>
-  <table class="tree-table" id="tree"></table>
+  <div id="tree"></div>
 </main>
 
 <script>
@@ -306,129 +331,122 @@ function updateBreadcrumb(viewId) {
 }
 
 function makeRow(row) {
-  const tr = document.createElement("tr");
-  tr.className = "tree-row";
-
   if (row.role === "sentinel") {
-    tr.className = "sentinel-row";
-    const td = document.createElement("td");
-    td.colSpan = 4;
-    td.textContent = "  — roots";
-    tr.appendChild(td);
-    return tr;
+    const div = document.createElement("div");
+    div.className = "sentinel-card";
+    div.textContent = "  — roots";
+    return div;
   }
 
-  if (row.role === "selected") tr.classList.add("selected");
-  if (row.role === "home_root") tr.classList.add("home-root");
-
-  // make clickable rows navigate (children and home_roots → their node view)
+  const card = document.createElement("div");
+  card.className = "card";
+  if (row.role === "selected") card.classList.add("selected");
   if (row.role === "child" || row.role === "home_root" || row.role === "parent") {
-    tr.style.cursor = "pointer";
-    tr.addEventListener("click", () => renderView(row.node_id));
+    card.classList.add("clickable");
+    card.addEventListener("click", () => renderView(row.node_id));
   }
 
-  tr.appendChild(makePulseCell(row));
-  tr.appendChild(makeDescCell(row));
-  tr.appendChild(makeWhenCell(row));
-  tr.appendChild(makeCommentCell(row));
-  return tr;
+  card.appendChild(makeDescLine(row));
+  if (row.comment) card.appendChild(makeCommentLine(row));
+  if (row.pulse_label || row.when_label) card.appendChild(makeMetaLine(row));
+
+  return card;
 }
 
-// ── Pulse cell ─────────────────────────────────────────────────────────────────
+// ── Line 1: connector + description ───────────────────────────────────────────
 
-function makePulseCell(row) {
-  const td = document.createElement("td");
-  td.className = "pulse-cell";
-  const label = row.pulse_label || "";
-  if (!label) return td;
-  const stripped = label.trimStart();
-  let cls = "pulse-active";
-  if (stripped.startsWith("!!!")) cls = "pulse-overdue";
-  else if (stripped.startsWith("!")) cls = "pulse-forgotten";
-  const span = document.createElement("span");
-  span.className = cls;
-  span.textContent = label;
-  td.appendChild(span);
-  return td;
-}
-
-// ── Desc cell ──────────────────────────────────────────────────────────────────
-
-function makeDescCell(row) {
-  const td = document.createElement("td");
-  td.className = "desc-cell";
+function makeDescLine(row) {
+  const line = document.createElement("div");
+  line.className = "card-line1";
 
   if (row.role === "selected") {
-    td.innerHTML = `<span class="selected-glyph">▶ </span>`
+    line.innerHTML = `<span class="selected-glyph">▶ </span>`
       + `<span class="desc-selected">${(row.bullet ? row.bullet + " " : "") + esc(row.description)}</span>`;
-    return td;
+    return line;
   }
 
   if (row.role === "home_root") {
-    td.innerHTML = `<span>  </span>`
+    line.innerHTML = `<span>  </span>`
       + `<span class="desc-d0">${(row.bullet ? row.bullet + " " : "") + esc(row.description)}</span>`;
-    return td;
+    return line;
   }
 
-  // parent or child: build connector prefix
   const segments = treePrefix(row.depth, row.index, row.items_depths, row.role === "parent", row.bullet);
   let html = `<span>  </span>`;
   for (const [text, level] of segments) {
-    const cls = level >= 2 ? "connector-deep" : "connector";
-    html += `<span class="${cls}">${esc(text)}</span>`;
+    html += `<span class="${level >= 2 ? "connector-deep" : "connector"}">${esc(text)}</span>`;
   }
-
   const descCls = row.depth === 0 ? "desc-d0" : row.depth >= 2 ? "desc-d2" : "desc-d1";
-  const prefix = row.bullet ? " " : "";
-  html += `<span class="${descCls}">${prefix + esc(row.description)}</span>`;
-
+  html += `<span class="${descCls}">${(row.bullet ? " " : "") + esc(row.description)}</span>`;
   if (row.also_labels && row.also_labels.length) {
     html += `<span class="also">  ← ${esc(row.also_labels.join(", "))}</span>`;
   }
-
-  td.innerHTML = html;
-  return td;
+  line.innerHTML = html;
+  return line;
 }
 
-// ── When cell ──────────────────────────────────────────────────────────────────
+// ── Line 2: comment ────────────────────────────────────────────────────────────
 
-function makeWhenCell(row) {
-  const td = document.createElement("td");
-  td.className = "when-cell";
-  if (!row.when_label) return td;
+function makeCommentLine(row) {
+  const line = document.createElement("div");
+  line.className = "card-line2";
+  // indent to align under the description text (past the connector prefix)
+  const indent = indentForRow(row);
+  line.innerHTML = `<span style="flex-shrink:0">${indent}</span>`
+    + `<span class="card-comment">${esc(row.comment)}</span>`;
+  return line;
+}
 
-  if (row.is_closed) {
-    const reason = row.close_reason || "done";
-    const glyphs = { done: "✓", discarded: "✗", active: "▸", forgotten: "·", overdue: "!" };
-    const colorMap = {
-      done: "when-done", discarded: "when-discarded",
-      overdue: "when-overdue", forgotten: "when-overdue",
-    };
-    const glyph = glyphs[reason] || "✓";
-    const cls = colorMap[reason] || "when-done";
-    const label = row.when_label;
-    let inner;
-    if (label.includes("· was")) {
-      const [main, suffix] = label.split("· was");
-      inner = `<span class="${cls}">${glyph} ${esc(main.trimEnd())}</span>`
-            + `<span class="connector">  · was${esc(suffix)}</span>`;
-    } else {
-      inner = `<span class="${cls}">${glyph} ${esc(label)}</span>`;
-    }
-    td.innerHTML = inner;
-  } else {
-    td.innerHTML = `<span class="when-open">${esc(row.when_label)}</span>`;
+// ── Line 3: pulse + when ───────────────────────────────────────────────────────
+
+function makeMetaLine(row) {
+  const line = document.createElement("div");
+  line.className = "card-line3";
+  const indent = indentForRow(row);
+
+  let pulseHtml = "";
+  if (row.pulse_label) {
+    const stripped = row.pulse_label.trimStart();
+    let cls = "pulse-active";
+    if (stripped.startsWith("!!!")) cls = "pulse-overdue";
+    else if (stripped.startsWith("!")) cls = "pulse-forgotten";
+    pulseHtml = `<span class="card-pulse ${cls}">${esc(row.pulse_label)}</span>`;
   }
-  return td;
+
+  let whenHtml = "";
+  if (row.when_label) {
+    if (row.is_closed) {
+      const reason = row.close_reason || "done";
+      const glyphs = { done: "✓", discarded: "✗", active: "▸", forgotten: "·", overdue: "!" };
+      const colorMap = { done: "when-done", discarded: "when-discarded", overdue: "when-overdue", forgotten: "when-overdue" };
+      const glyph = glyphs[reason] || "✓";
+      const cls = colorMap[reason] || "when-done";
+      const label = row.when_label;
+      if (label.includes("· was")) {
+        const [main, suffix] = label.split("· was");
+        whenHtml = `<span class="card-when ${cls}">${glyph} ${esc(main.trimEnd())}</span>`
+                 + `<span class="connector">  · was${esc(suffix)}</span>`;
+      } else {
+        whenHtml = `<span class="card-when ${cls}">${glyph} ${esc(label)}</span>`;
+      }
+    } else {
+      whenHtml = `<span class="card-when when-open">${esc(row.when_label)}</span>`;
+    }
+  }
+
+  line.innerHTML = `<span style="flex-shrink:0">${indent}</span>`
+    + `<span class="card-meta">${pulseHtml}${whenHtml}</span>`;
+  return line;
 }
 
-// ── Comment cell ───────────────────────────────────────────────────────────────
+// ── Indent helper: spaces to align lines 2-3 under the description ─────────────
 
-function makeCommentCell(row) {
-  const td = document.createElement("td");
-  td.className = "comment-cell";
-  td.textContent = row.comment || "";
-  return td;
+function indentForRow(row) {
+  if (row.role === "selected" || row.role === "home_root") return "    ";
+  const segments = treePrefix(row.depth, row.index, row.items_depths, row.role === "parent", "");
+  // each segment is 4 chars; leading "  " + segments chars, replace connectors with spaces
+  const connectorWidth = segments.reduce((n, [t]) => n + t.length, 0);
+  return "  " + " ".repeat(connectorWidth) + (row.bullet ? "  " : "");
 }
 
 // ── Tree connector logic (mirrors render.py _tree_prefix_segments) ─────────────
@@ -468,6 +486,15 @@ function esc(s) {
   if (!s) return "";
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
+
+// ── Sidebar collapse ───────────────────────────────────────────────────────────
+
+document.getElementById("sidebar-header").addEventListener("click", () => {
+  const sidebar = document.getElementById("sidebar");
+  const btn = document.getElementById("toggle-btn");
+  const collapsed = sidebar.classList.toggle("collapsed");
+  btn.textContent = collapsed ? "›" : "‹";
+});
 
 // ── Boot ───────────────────────────────────────────────────────────────────────
 
