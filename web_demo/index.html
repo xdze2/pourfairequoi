@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pfq</title>
+<style>
+  :root {
+    --bg:        #0d1b2a;
+    --bg-panel:  #111f2e;
+    --fg:        #d4cdb8;
+    --fg-dim:    #4a5a6a;
+    --fg-mid:    #8a9aaa;
+    --accent:    #2e4a66;
+    --selected-bg: #1c2d40;
+    --cursor-bg: #2e2600;
+    --cursor-fg: #f0ead0;
+
+    --c-done:      #7ec87f;
+    --c-discarded: #555555;
+    --c-overdue:   #c47a7a;
+    --c-forgotten: #9b8a3a;
+    --c-slowing:   #c4b870;
+    --c-active:    #7ab8d4;
+
+    --font: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 220px;
+    min-width: 180px;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--accent);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #sidebar-header {
+    padding: 10px 12px 6px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--accent);
+    flex-shrink: 0;
+  }
+
+  #search-wrap {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--accent);
+    flex-shrink: 0;
+  }
+
+  #search {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 3px 6px;
+    outline: none;
+  }
+  #search:focus { border-color: var(--c-active); }
+
+  #node-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .node-item {
+    padding: 3px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    color: var(--fg-mid);
+  }
+  .node-item:hover { background: var(--accent); color: var(--fg); }
+  .node-item.active { background: var(--selected-bg); color: var(--fg); }
+
+  /* ── Main view ── */
+  #main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 20px;
+  }
+
+  #breadcrumb {
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-bottom: 8px;
+    min-height: 16px;
+  }
+  #breadcrumb span { cursor: pointer; }
+  #breadcrumb span:hover { color: var(--fg-mid); }
+
+  /* ── Tree rows ── */
+  .tree-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .tree-row {
+    cursor: default;
+  }
+  .tree-row:hover td { background: var(--selected-bg); }
+
+  .tree-row.selected td { background: var(--selected-bg); }
+  .tree-row.selected .desc-cell { font-weight: bold; }
+
+  .tree-row.home-root .desc-cell { font-weight: bold; }
+
+  td {
+    padding: 1px 6px;
+    white-space: pre;
+    vertical-align: middle;
+  }
+
+  .pulse-cell {
+    width: 80px;
+    min-width: 80px;
+    text-align: right;
+    font-size: 12px;
+  }
+  .desc-cell {
+    min-width: 300px;
+  }
+  .when-cell {
+    width: 140px;
+    min-width: 100px;
+    font-size: 12px;
+    color: #5a9aaa;
+  }
+  .comment-cell {
+    color: #505a60;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+    white-space: nowrap;
+  }
+
+  .sentinel-row td {
+    color: var(--fg-dim);
+    padding-top: 4px;
+    padding-bottom: 4px;
+    cursor: default;
+  }
+
+  /* connector chars: dim for deep levels */
+  .connector { color: var(--fg-dim); }
+  .connector-deep { color: #2a3a4a; }
+
+  /* desc text colours by depth */
+  .desc-d0 { color: var(--fg); }
+  .desc-d1 { color: #eaeaea; }
+  .desc-d2 { color: #b4b4b4; }
+  .desc-selected { color: var(--fg); font-weight: bold; }
+  .selected-glyph { color: var(--fg); font-weight: bold; }
+
+  .also { color: #505050; }
+
+  /* pulse colours */
+  .pulse-overdue  { color: var(--c-overdue); }
+  .pulse-forgotten{ color: var(--c-forgotten); }
+  .pulse-active   { color: var(--c-active); }
+
+  /* when colours */
+  .when-done      { color: var(--c-done); }
+  .when-discarded { color: var(--c-discarded); }
+  .when-overdue   { color: var(--c-overdue); }
+  .when-open      { color: #5a9aaa; }
+
+  /* home button */
+  #home-btn {
+    display: inline-block;
+    margin-bottom: 10px;
+    padding: 2px 10px;
+    font-size: 12px;
+    font-family: var(--font);
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--fg-mid);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  #home-btn:hover { border-color: var(--c-active); color: var(--fg); }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<nav id="sidebar">
+  <div id="sidebar-header">pfq</div>
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="search…" autocomplete="off" spellcheck="false">
+  </div>
+  <div id="node-list"></div>
+</nav>
+
+<main id="main">
+  <div id="breadcrumb"></div>
+  <button id="home-btn">⌂ home</button>
+  <table class="tree-table" id="tree"></table>
+</main>
+
+<script>
+// ── Data loading ───────────────────────────────────────────────────────────────
+
+let DATA = null;
+let currentView = "home";   // "home" | node_id
+
+async function loadData() {
+  const resp = await fetch("data.json");
+  DATA = await resp.json();
+  populateNodeList(DATA.nodes);
+  renderView("home");
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+
+function populateNodeList(nodes) {
+  const list = document.getElementById("node-list");
+  list.innerHTML = "";
+  for (const n of nodes) {
+    const el = document.createElement("div");
+    el.className = "node-item";
+    el.textContent = n.description || n.node_id;
+    el.dataset.nodeId = n.node_id;
+    el.addEventListener("click", () => renderView(n.node_id));
+    list.appendChild(el);
+  }
+}
+
+document.getElementById("search").addEventListener("input", function() {
+  const q = this.value.toLowerCase();
+  for (const el of document.querySelectorAll(".node-item")) {
+    const match = !q || el.textContent.toLowerCase().includes(q);
+    el.style.display = match ? "" : "none";
+  }
+});
+
+function setActiveSidebarItem(nodeId) {
+  for (const el of document.querySelectorAll(".node-item")) {
+    el.classList.toggle("active", el.dataset.nodeId === nodeId);
+  }
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────────
+
+document.getElementById("home-btn").addEventListener("click", () => renderView("home"));
+
+function renderView(viewId) {
+  currentView = viewId;
+  const rows = viewId === "home" ? DATA.home : DATA.views[viewId];
+  if (!rows) return;
+
+  setActiveSidebarItem(viewId === "home" ? null : viewId);
+  updateBreadcrumb(viewId);
+
+  const tbody = document.getElementById("tree");
+  tbody.innerHTML = "";
+
+  for (const row of rows) {
+    tbody.appendChild(makeRow(row));
+  }
+}
+
+function updateBreadcrumb(viewId) {
+  const el = document.getElementById("breadcrumb");
+  if (viewId === "home") { el.innerHTML = ""; return; }
+  const views = DATA.views[viewId];
+  if (!views) return;
+  // collect parent rows for breadcrumb
+  const parents = views.filter(r => r.role === "parent").reverse();
+  let html = `<span onclick="renderView('home')">home</span>`;
+  for (const p of parents) {
+    html += ` › <span onclick="renderView('${p.node_id}')">${esc(p.description)}</span>`;
+  }
+  const sel = views.find(r => r.role === "selected");
+  if (sel) html += ` › <strong>${esc(sel.description)}</strong>`;
+  el.innerHTML = html;
+}
+
+function makeRow(row) {
+  const tr = document.createElement("tr");
+  tr.className = "tree-row";
+
+  if (row.role === "sentinel") {
+    tr.className = "sentinel-row";
+    const td = document.createElement("td");
+    td.colSpan = 4;
+    td.textContent = "  — roots";
+    tr.appendChild(td);
+    return tr;
+  }
+
+  if (row.role === "selected") tr.classList.add("selected");
+  if (row.role === "home_root") tr.classList.add("home-root");
+
+  // make clickable rows navigate (children and home_roots → their node view)
+  if (row.role === "child" || row.role === "home_root" || row.role === "parent") {
+    tr.style.cursor = "pointer";
+    tr.addEventListener("click", () => renderView(row.node_id));
+  }
+
+  tr.appendChild(makePulseCell(row));
+  tr.appendChild(makeDescCell(row));
+  tr.appendChild(makeWhenCell(row));
+  tr.appendChild(makeCommentCell(row));
+  return tr;
+}
+
+// ── Pulse cell ─────────────────────────────────────────────────────────────────
+
+function makePulseCell(row) {
+  const td = document.createElement("td");
+  td.className = "pulse-cell";
+  const label = row.pulse_label || "";
+  if (!label) return td;
+  const stripped = label.trimStart();
+  let cls = "pulse-active";
+  if (stripped.startsWith("!!!")) cls = "pulse-overdue";
+  else if (stripped.startsWith("!")) cls = "pulse-forgotten";
+  const span = document.createElement("span");
+  span.className = cls;
+  span.textContent = label;
+  td.appendChild(span);
+  return td;
+}
+
+// ── Desc cell ──────────────────────────────────────────────────────────────────
+
+function makeDescCell(row) {
+  const td = document.createElement("td");
+  td.className = "desc-cell";
+
+  if (row.role === "selected") {
+    td.innerHTML = `<span class="selected-glyph">▶ </span>`
+      + `<span class="desc-selected">${(row.bullet ? row.bullet + " " : "") + esc(row.description)}</span>`;
+    return td;
+  }
+
+  if (row.role === "home_root") {
+    td.innerHTML = `<span>  </span>`
+      + `<span class="desc-d0">${(row.bullet ? row.bullet + " " : "") + esc(row.description)}</span>`;
+    return td;
+  }
+
+  // parent or child: build connector prefix
+  const segments = treePrefix(row.depth, row.index, row.items_depths, row.role === "parent", row.bullet);
+  let html = `<span>  </span>`;
+  for (const [text, level] of segments) {
+    const cls = level >= 2 ? "connector-deep" : "connector";
+    html += `<span class="${cls}">${esc(text)}</span>`;
+  }
+
+  const descCls = row.depth === 0 ? "desc-d0" : row.depth >= 2 ? "desc-d2" : "desc-d1";
+  const prefix = row.bullet ? " " : "";
+  html += `<span class="${descCls}">${prefix + esc(row.description)}</span>`;
+
+  if (row.also_labels && row.also_labels.length) {
+    html += `<span class="also">  ← ${esc(row.also_labels.join(", "))}</span>`;
+  }
+
+  td.innerHTML = html;
+  return td;
+}
+
+// ── When cell ──────────────────────────────────────────────────────────────────
+
+function makeWhenCell(row) {
+  const td = document.createElement("td");
+  td.className = "when-cell";
+  if (!row.when_label) return td;
+
+  if (row.is_closed) {
+    const reason = row.close_reason || "done";
+    const glyphs = { done: "✓", discarded: "✗", active: "▸", forgotten: "·", overdue: "!" };
+    const colorMap = {
+      done: "when-done", discarded: "when-discarded",
+      overdue: "when-overdue", forgotten: "when-overdue",
+    };
+    const glyph = glyphs[reason] || "✓";
+    const cls = colorMap[reason] || "when-done";
+    const label = row.when_label;
+    let inner;
+    if (label.includes("· was")) {
+      const [main, suffix] = label.split("· was");
+      inner = `<span class="${cls}">${glyph} ${esc(main.trimEnd())}</span>`
+            + `<span class="connector">  · was${esc(suffix)}</span>`;
+    } else {
+      inner = `<span class="${cls}">${glyph} ${esc(label)}</span>`;
+    }
+    td.innerHTML = inner;
+  } else {
+    td.innerHTML = `<span class="when-open">${esc(row.when_label)}</span>`;
+  }
+  return td;
+}
+
+// ── Comment cell ───────────────────────────────────────────────────────────────
+
+function makeCommentCell(row) {
+  const td = document.createElement("td");
+  td.className = "comment-cell";
+  td.textContent = row.comment || "";
+  return td;
+}
+
+// ── Tree connector logic (mirrors render.py _tree_prefix_segments) ─────────────
+
+function treePrefix(depth, index, itemsDepths, reverse, bullet) {
+  function hasSiblingAt(lvl) {
+    const scan = reverse
+      ? Array.from({length: index}, (_, i) => index - 1 - i)
+      : Array.from({length: itemsDepths.length - index - 1}, (_, i) => index + 1 + i);
+    for (const j of scan) {
+      if (itemsDepths[j] < lvl) return false;
+      if (itemsDepths[j] === lvl) return true;
+    }
+    return false;
+  }
+
+  const end = bullet || " ";
+  const segments = [];
+  for (let lvl = 1; lvl < depth; lvl++) {
+    segments.push(["│   ".replace(/ $/, hasSiblingAt(lvl) ? "│   " : "    ").slice(0,4), lvl]);
+    // simpler: push the right string directly
+    segments[segments.length - 1] = [hasSiblingAt(lvl) ? "│   " : "    ", lvl];
+  }
+  if (depth >= 1) {
+    if (reverse) {
+      segments.push([hasSiblingAt(depth) ? "├──" + end : "╭──" + end, depth]);
+    } else {
+      segments.push([hasSiblingAt(depth) ? "├──" + end : "╰──" + end, depth]);
+    }
+  }
+  return segments;
+}
+
+// ── Util ───────────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  if (!s) return "";
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+
+loadData();
+</script>
+</body>
+</html>
