@@ -158,9 +158,9 @@ class PfqApp(App):
         yield Static("", id="app-header")
         table = DataTable(cursor_type="cell", show_header=True)
         table.add_column("pulse", key="pulse", width=13)
-        table.add_column("description", key="desc", width=43)
+        table.add_column("description", key="desc", width=54)
         table.add_column("when", key="target", width=18)
-        table.add_column("mood", key="comment", width=22)
+        table.add_column("mood", key="comment")
         yield table
         yield Static("  ⬆ why  ·  ⬇ how", id="axis-label")
         yield CompanionPanel(id="companion")
