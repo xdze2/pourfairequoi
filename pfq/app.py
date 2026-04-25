@@ -35,6 +35,7 @@ from pfq.modals import (
     UpdateModal,
 )
 from pfq.sync import (
+    check_remote_access,
     commit_and_push,
     get_remote_name,
     has_remote,
@@ -740,6 +741,12 @@ class PfqApp(App):
     def action_sync(self) -> None:
         if not self._sync_enabled:
             self.notify("No git remote configured for this vault", severity="warning")
+            return
+        # Pre-flight check: can we reach the remote?
+        check_result = check_remote_access(self.vault_path)
+        if not check_result.ok:
+            self.notify(f"Sync failed: {check_result.message}", severity="warning")
+            self._update_header("fail")
             return
         result = commit_and_push(self.vault_path)
         if result.ok:

@@ -18,15 +18,26 @@ class SyncResult:
     message: str  # short, suitable for a toast or modal line
 
 
-def _run(args: list[str], cwd: Path) -> tuple[int, str, str]:
-    """Run a git command, return (returncode, stdout, stderr)."""
-    result = subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+def _run(args: list[str], cwd: Path, timeout: int = 5) -> tuple[int, str, str]:
+    """Run a git command, return (returncode, stdout, stderr).
+
+    timeout is in seconds; prevents hanging on SSH password prompts.
+    """
+    try:
+        # GIT_SSH_COMMAND disables password prompts — SSH will fail fast instead of hanging
+        env = {"GIT_SSH_COMMAND": "ssh -o BatchMode=yes"}
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            input="",  # Prevent blocking on stdin
+            timeout=timeout,
+            env={**subprocess.os.environ, **env},  # Merge with existing env
+        )
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return 124, "", "Command timed out (likely waiting for password/authentication)"
 
 
 def is_git_repo(vault_path: Path) -> bool:
@@ -55,13 +66,32 @@ def has_uncommitted_changes(vault_path: Path) -> bool:
     return code == 0 and bool(out.strip())
 
 
+def check_remote_access(vault_path: Path) -> SyncResult:
+    """Check if the remote is accessible (pre-flight check).
+
+    Uses 'git ls-remote' which is lightweight and doesn't modify anything.
+    Returns success if remote is reachable, failure with advice otherwise.
+    """
+    code, out, err = _run(["git", "ls-remote", "--heads"], vault_path, timeout=3)
+    if code == 0:
+        return SyncResult(ok=True, message="Remote is accessible")
+    # timeout or auth issue
+    if code == 124:
+        return SyncResult(ok=False, message="SSH authentication required — set up SSH keys or use HTTPS remote")
+    # other errors
+    return SyncResult(ok=False, message=err or out or "Cannot access remote")
+
+
 def pull(vault_path: Path) -> SyncResult:
-    """Pull from remote. Detects merge conflicts."""
+    """Pull from remote. Detects merge conflicts and auth issues."""
     code, out, err = _run(["git", "pull", "--no-rebase"], vault_path)
     if code == 0:
         if "Already up to date" in out:
             return SyncResult(ok=True, message="Already up to date")
         return SyncResult(ok=True, message="Pulled latest changes")
+    # timeout or auth issue (SSH password prompt hangs)
+    if code == 124:
+        return SyncResult(ok=False, message="SSH authentication required — set up SSH keys or use HTTPS remote")
     # conflict?
     if "CONFLICT" in out or "CONFLICT" in err or "merge conflict" in err.lower():
         return SyncResult(ok=False, message="Merge conflict — fix in your editor before next sync")
@@ -75,6 +105,9 @@ def commit_and_push(vault_path: Path) -> SyncResult:
         code, _, err = _run(["git", "push"], vault_path)
         if code == 0:
             return SyncResult(ok=True, message="Nothing to commit — pushed")
+        # timeout or auth issue (SSH password prompt hangs)
+        if code == 124:
+            return SyncResult(ok=False, message="SSH authentication required — set up SSH keys or use HTTPS remote")
         return SyncResult(ok=False, message=err or "Push failed")
 
     # Stage
@@ -92,6 +125,9 @@ def commit_and_push(vault_path: Path) -> SyncResult:
     # Push
     code, _, err = _run(["git", "push"], vault_path)
     if code != 0:
+        # timeout or auth issue (SSH password prompt hangs)
+        if code == 124:
+            return SyncResult(ok=False, message="SSH authentication required — set up SSH keys or use HTTPS remote")
         return SyncResult(ok=False, message=err or "Push failed — committed locally")
 
     return SyncResult(ok=True, message=f"Synced: {msg}")
