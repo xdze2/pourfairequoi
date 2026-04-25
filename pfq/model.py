@@ -104,7 +104,7 @@ class NodeGraph:
         children = {lnk.child_id for lnk in self.links}
         return [nid for nid in self.nodes if nid not in children]
 
-    def _dfs_tree(self, node_id: str, neighbors_fn, max_depth: int) -> List[tuple["Node", int]]:
+    def _dfs_tree(self, node_id: str, neighbors_fn, max_depth: Optional[int]) -> List[tuple["Node", int]]:
         result, visited = [], {node_id}
         stack = [(nid, 1) for nid in reversed(neighbors_fn(node_id))]
         while stack:
@@ -113,7 +113,7 @@ class NodeGraph:
                 continue
             visited.add(current_id)
             result.append((self.nodes[current_id], depth))
-            if depth < max_depth:
+            if max_depth is None or depth < max_depth:
                 stack += [
                     (nid, depth + 1)
                     for nid in reversed(neighbors_fn(current_id))
@@ -137,10 +137,10 @@ class NodeGraph:
         scored.sort(reverse=True, key=lambda x: x[0])
         return [node for _, node in scored]
 
-    def get_parents_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+    def get_parents_tree(self, node_id: str, max_depth: Optional[int] = 2) -> List[tuple["Node", int]]:
         return self._dfs_tree(node_id, self.get_parent_ids, max_depth)
 
-    def get_childrens_tree(self, node_id: str, max_depth: int = 2) -> List[tuple["Node", int]]:
+    def get_childrens_tree(self, node_id: str, max_depth: Optional[int] = 2) -> List[tuple["Node", int]]:
         return self._dfs_tree(node_id, self.get_children_ids, max_depth)
 
     def nodes_unanchored_after_removal(self, node_ids: set) -> set:

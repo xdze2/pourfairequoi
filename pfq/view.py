@@ -201,7 +201,12 @@ def build_home_view(graph: NodeGraph, today: date = None) -> list[ViewRow]:
     rows: list[ViewRow] = []
     seen: set[str] = set()
 
-    for root_id in sorted(graph.get_roots()):
+    roots = sorted(
+        graph.get_roots(),
+        key=lambda rid: len(graph.get_childrens_tree(rid, max_depth=None)),
+        reverse=True,
+    )
+    for root_id in roots:
         root = graph.get_node(root_id)
         rows.append(_make_row(graph, root, "home_root", 0, today=today))
         seen.add(root_id)

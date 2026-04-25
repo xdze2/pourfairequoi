@@ -6,8 +6,8 @@ Date: 2026-04-24
 - Show secondary link again, see [backlog/improve_2nd_why_display.md]()
 - Fix dates parsing/format!!
 - shift left-right: move identation (as a regular list)
-- Fix col wdith: comment full width
-- Sort roots by importance (size of downward tree)
+- [x] Fix col wdith: comment full width (auto is not working)
+- [x] Sort roots by importance (size of downward tree)
 - bug in parents + append
 - nudge to create layers (max 6-8 child nodes, else than logs) 
 - Merge home view and regular view (fix symbols leaf in home view)
