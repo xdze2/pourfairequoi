@@ -742,6 +742,7 @@ class PfqApp(App):
         if not self._sync_enabled:
             self.notify("No git remote configured for this vault", severity="warning")
             return
+        self.notify("Syncing…", timeout=5)
         # Pre-flight check: can we reach the remote?
         check_result = check_remote_access(self.vault_path)
         if not check_result.ok:
