@@ -3,27 +3,17 @@
 Date: 2026-04-24
 
 
-- Show secondary link again, see [backlog/improve_2nd_why_display.md]()
+- [x] Show secondary link again, see [backlog/improve_2nd_why_display.md]()
 - [x] Fix dates parsing/format!!
 - [x] shift left-right: move identation (as a regular list)!!
 - [x] Fix col wdith: comment full width (auto is not working)
 - [x] Sort roots by importance (size of downward tree)
-- bug in parents + append (--> allow edit only if result is visible in the tree graph)
 - [tbd] nudge to create layers (max 6-8 child nodes, else than logs) 
-- [hard] Merge home view and regular view (fix symbols leaf in home view)
 - [tbd] pulse = -2/+2 days view ----> get back the log time idea (cols: day, week, month, col year) ???
-
-scale + position
-yQmwd
-#
- 0
-  #
-    0
-    +3
-
-
+- [hard] Merge home view and regular view (fix symbols leaf in home view)
 - [hard] Full page calendar view
-- When a node is collapsed, pulse is propagated upward (min) (with a glyph)
+- [cool] When a node is collapsed, pulse is propagated upward (min) (with a glyph)
+- [ ] bug in parents + append (--> allow edit only if result is visible in the tree graph)
 
 ## 1. Modal Style & UX Unification
 
