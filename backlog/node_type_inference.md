@@ -29,6 +29,9 @@ Verb detection: first word in a known list (Buy, Make, Find, Get, Go, Build, Ask
 Test, Fix, Try, Use, Start, Continue, Do, Look, Run, Setup, Create, Draw, ...).
 Verb/noun detection is a fallback — explicit markers take precedence.
 
+- `$` to buy/budget
+- `%`, `))`, `((`, `& desc`, `| pipe`, `/>  <]  <= )<  `, `(<  >] -] desc   ::    ::: `
+
 ## UI feedback
 
 - Chip or subtle color change appears inline as the user types in `EditModal`
