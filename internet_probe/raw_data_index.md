@@ -123,6 +123,24 @@ Sources collected in `raw_data_src/`. Quality and relevance assessed relative to
 | `Local-first software You own your data, in spite of the cloud.md` | Ink & Switch essay | ★★★★★ | The canonical manifesto. Seven ideals: fast, multi-device, offline, collaboration, longevity, privacy, user control. CRDTs as enabling technology. Three prototypes. **Core intellectual reference for pfq's storage model.** |
 | `Show HN Muse 2.0 with local-first sync  Hacker News.md` | HN thread | ★★★ | Practical CRDT implementation (Swift + Go sync server). Transactional/blob/ephemeral data model. Demonstrates local-first is production-viable. |
 
+### Product design philosophy
+
+| File | Source | Quality | Relevance |
+|---|---|---|---|
+| `Three constraints before I build anything  Hacker News.md` | HN thread, 2025 | ★★★★ | Compact thread on product primitives. Core idea: small number of powerful, composable primitives beats feature sprawl. Tana cited as a cautionary case (two primitives yet overwhelming complexity). Useful vocabulary: "concept count", "nouns and verbs of a product." |
+
+### Side-project psychology
+
+| File | Source | Quality | Relevance |
+|---|---|---|---|
+| `It's OK to abandon your side-project (2024)  Hacker News.md` | HN thread, 2024 | ★★★ | Compact thread on the emotional lifecycle of side projects. Themes: "end-of-life wrap-up" as closure ritual, weekly justification loop, building for learning over shipping. Tangentially relevant as pfq is itself a side project. |
+
+### AI and thinking
+
+| File | Source | Quality | Relevance |
+|---|---|---|---|
+| `AI should elevate your thinking, not replace it  Hacker News.md` | HN thread, 2025 | ★★★ | Large thread (~210k chars). Central debate: does AI-assisted coding atrophy engineering judgment? Key quote: "there is no compression algorithm for experience." Peripherally relevant — surfaces the broader question of tools vs. thinking that underpins pfq's philosophy. **Underexplored** — only partial read. |
+
 ---
 
 ## Coverage gaps — suggested additional sources
