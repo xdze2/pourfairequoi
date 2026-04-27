@@ -2,6 +2,24 @@
 
 Cycles are semantically meaningful (self-reinforcing loops, growth feedback) and should not be silently broken. The problem is purely a rendering one.
 
+
+## Example
+
+```
+╭── Keep up with IA and code
+▶ Make a new app
+│   ├──< PourFaireQuoi App
+│   ╰──< Build a vintage radio  (  ! 1w)
+╰── Other ideas
+    ├──○ Port Beehave models to python using Claude
+    ├──○ Mini HA (thermique bat.)
+    ├──○ HN post visibility model
+    ├──< YouTube history viz
+    ╰──○ Pyrene: valley as a tree... Tarascon->Auzat->...
+```
+
+--> show duplicated node, flag with cycle glyph ?
+
 ## Proposed approach
 
 Keep cycles in the graph, make the app robust to them:
