@@ -11,44 +11,19 @@ Date: 2026-04-24
 - [x] Fix glyps in home view
 - [tbd] nudge to create layers (max 6-8 child nodes, else than logs) 
 - [tbd] pulse = -2/+2 days view ----> get back the log time idea (cols: day, week, month, col year) ???
-- [hard] Merge home view and regular view
+- [hard] Merge home view and regular view: see [text](lenses.md)
 - [hard] Full page calendar view
 - [cool] When a node is collapsed, pulse is propagated upward (min) (with a glyph)
 - [ ] bug in parents + append (--> allow edit only if result is visible in the tree graph)
 
 ## 1. Modal Style & UX Unification
 
-**Current state**: Modals have inconsistent styling and interaction patterns.
-
-**Goal**: Make all modals feel like part of the same system.
-
-**Tasks**:
 - [ ] Audit all modals (`CreateModal`, `DeleteModal`, `LinkModal`, `StatusModal`, `EditModal`)
 - [ ] Define unified modal chrome (title, border, footer with action buttons)
 - [ ] Standardize dismiss patterns (Esc, Enter, Ctrl+S — currently inconsistent)
-- [ ] Test modal nesting (can you open one modal from another? no...)
 - [ ] Consider: do all modals need the same width? Consistent focus/blur behavior?
 
-**Why**: Users should spend mental energy on *what* they're doing, not *how* the modal works.
 
----
-
-## 2. Exploit "Mood" / Comment → Inner Voice (Companion)
-
-**Current state**: The `CompanionPanel` exists but is underutilized. Comments are just text.
-
-**Idea**: Comments become "notes to self" that the companion can respond to or amplify.
-
-**Possible directions**:
-- [ ] Show companion reactions to the current node's comment (encouragement, devil's advocate, breakdown of vague goals)
-- [ ] Companion summarizes the "why chain" (parents) in plain language — why are you really doing this?
-- [ ] Companion flags inconsistencies (e.g., "this task has been open 6 months with no update, but target date was 2 weeks ago")
-- [ ] Companion suggests next action based on comment + status + date
-- [ ] Toggle: show companion for nodes with comments only, or always?
-
-**Why**: The companion is pfq's soul — it's what differentiates from a flat task list. Make it pull its weight.
-
----
 
 ## 3. Node View Filtering: Mask Done / Old Tasks
 
@@ -99,20 +74,7 @@ Date: 2026-04-24
 
 ## 6. New Views: "What's Next?" / "What's Up Today?"
 
-**Current views**: Home (roots + children), Node (neighborhood).
-
-**New views to explore**:
-- [ ] **Today's Agenda**: All open tasks due today or overdue, sorted by urgency. Show parents (why) for context.
-- [ ] **What's Hot**: Recently closed tasks (last 7 days) + tasks due soon (next 7 days) + forgotten tasks. Shows momentum + risk.
-- [ ] **Inbox / Unlinked**: New tasks that haven't been linked to a parent yet. Quick triage.
-- [ ] **Search Results**: Jump-to view after `s` search.
-
-**Implementation**:
-- [ ] Add navigation keys: `t` for today, `n` for next (hot), `i` for inbox
-- [ ] Reuse `build_node_view()` logic where possible (same ViewRow rendering)
-- [ ] Consider: can these be tabs instead of separate views?
-
-**Why**: Different use cases (morning planning, quick check-in, end-of-day review) need different views. The current neighborhood model is exploration-focused; these would be action-focused.
+see lenses...
 
 ---
 
